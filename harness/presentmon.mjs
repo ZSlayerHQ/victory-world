@@ -15,12 +15,15 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { loadLocalEnv } from './local-env.mjs';
 import { FRAME_RE, stripAnsi } from './parse-run.mjs';
 
 export const DEFAULT_THRESHOLD = 1000;
 export const DEFAULT_SECONDS = 60;
 export const IDLE_STOP_MS = 30_000;
+// PRESENTMON_EXE overrides it, from the environment or harness/local.env (local-env.mjs).
 export const DEFAULT_EXE = '<project>/tools/presentmon/PresentMon-2.6.0-x64.exe';
+export const DEFAULT_CAPTURES = '/captures';
 
 const POLL_MS = 200;
 const BACKSLASH = String.fromCharCode(92);
@@ -53,9 +56,14 @@ function normalizeFolder(value) {
   return s || null;
 }
 
+// The root run-world.sh makes each run's capture folder under: VICTORY_CAPTURES, else the main PC's.
+export function capturesRoot(env = process.env) {
+  return (env.VICTORY_CAPTURES && normalizeFolder(env.VICTORY_CAPTURES)) || DEFAULT_CAPTURES;
+}
+
 // The capture folder: the log's "capture:" line, else its VICTORY_CAPTURE setting,
-// else /captures/<stamp>-<tag> from the log's file name.
-export function captureFolderFromLog(lines, logPath) {
+// else <captures root>/<stamp>-<tag> from the log's file name.
+export function captureFolderFromLog(lines, logPath, root = capturesRoot()) {
   for (const line of lines || []) {
     const plain = stripAnsi(line);
     const m =
@@ -70,7 +78,7 @@ export function captureFolderFromLog(lines, logPath) {
   if (!logPath) return null;
   const base = path.basename(logPath);
   const m = base.match(/^(\d{8}-\d{6})-(.+)\.log$/i);
-  return m ? `/captures/${m[1]}-${m[2]}` : null;
+  return m ? `${normalizeFolder(root)}/${m[1]}-${m[2]}` : null;
 }
 
 export function presentMonCsvForLog(lines, logPath) {
@@ -322,6 +330,7 @@ async function main(argv) {
     usage();
     return 2;
   }
+  loadLocalEnv();
   const positional = [];
   const options = {
     threshold: DEFAULT_THRESHOLD,

@@ -322,6 +322,26 @@ test('a harness-ended run says so, ahead of a device removal or a crash in the s
   assert.equal(parseExtras(lines.slice(0, 3), firstTs, lastTs).ending.kind, 'device_removed');
 });
 
+test('a settled run carries its settle time and ends on the settled clock', () => {
+  const lines = [
+    '2026-11-24T12:00:00.000000Z  INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (0.2 preparing: copies 0.1 ms 0.2 MB, textures 0.0 ms 0.0 MB; 0.9 on the GPU; 0.0 copying back 0.0 MB), 12 draws/frame, dropped 0 without a host pipeline (0 being made) and 1 indirect',
+    'harness: settled at 57 s (waiting 1558, 2.9 fps)',
+    'harness: ended by --settled-seconds after 75 s of settled scene',
+  ];
+  const { firstTs, lastTs } = parseLogLines(lines, 'synthetic.log');
+  const extras = parseExtras(lines, firstTs, lastTs);
+  assert.deepEqual(extras.settled, { seconds: 57, waiting: 1558, fps: 2.9 });
+  assert.equal(extras.settledTimeout, false);
+  assert.equal(extras.ending.text, 'ended by the harness after 75 s of settled scene');
+
+  const timedOut = [
+    'harness: ended by --settled-timeout after 600 s: the scene never settled',
+  ];
+  const timeout = parseExtras(timedOut, firstTs, lastTs);
+  assert.equal(timeout.settled, null);
+  assert.equal(timeout.settledTimeout, true);
+});
+
 test('host mesh pipeline refused counts as a refused pipeline too', () => {
   const lines = [
     `${TS}  WARN victory_gpu::pipeline::host: host pipeline refused error=The parameter is incorrect. (0x80070057) shaders=[compute aaaaaaaaaaaaaaaa]`,

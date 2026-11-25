@@ -4,6 +4,10 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && { pwd -W 2>/dev/null || pwd; })
 LOCK="$HERE/run.lock"
+# This machine's paths (harness/local.env, if there is one). It holds paths only: the OBS switch below never comes
+# from it.
+. "$HERE/local-env.sh"
+load_local_env "$HERE"
 
 REAL_GPU=1
 [ "${VICTORY_D3D12_WARP:-}" = 1 ] && REAL_GPU=0
@@ -36,4 +40,6 @@ printf 'pid %s, started %s, VICTORY_DIR=%s, args: %s\n' "$$" "$(date '+%F %T')" 
 # A lane worktree has no victory.toml of its own (it is git-ignored), so every run reads the main one.
 VICTORY_CONFIG=${VICTORY_CONFIG:-$ROOT/victory/victory.toml}
 export VICTORY_CONFIG
+# This wrapper holds the lock from here on: a save restore in the run below is this run's own.
+export WORLD_RUN_HOLDS_LOCK=1
 bash "$HERE/run-world.sh" "$@"

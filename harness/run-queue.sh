@@ -22,6 +22,9 @@
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+# VICTORY_WORKTREES and GAME_EXE: the environment, else harness/local.env, else the main PC's paths below.
+. "$HERE/local-env.sh"
+load_local_env "$HERE"
 WRAPPER=${RUN_QUEUE_WRAPPER:-$HERE/world-run.sh}
 WORKTREES=${VICTORY_WORKTREES:-<project>/worktrees}
 GAME_EXE=${GAME_EXE:-}

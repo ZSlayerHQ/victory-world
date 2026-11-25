@@ -1,0 +1,9 @@
+# example: a made-up route showing the file's shape — taps only, no held keys.
+#
+# Each entry is <seconds>:<key>[:<hold>], seconds counted from the run's start; a comment header may set
+# heavy-seconds and settled-seconds for the harness's own clocks.
+
+# settled-seconds: 30
+
+30:Enter
+60:Space

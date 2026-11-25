@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import nodePath from 'node:path';
 import { parseExtras, parseLogLines, readLogLines } from './parse-run.mjs';
+import { aggregate, collect } from './run-lines.mjs';
 import { presentMonCsvForLog, readPresentMon } from './presentmon.mjs';
 import { annotate, defaultNamesFile, loadNames } from './name-hashes.mjs';
 import {
@@ -46,7 +47,8 @@ const asJson = process.argv.includes('--json');
 
 const lines = readLogLines(path);
 const { summary: out, details, firstTs, lastTs } = parseLogLines(lines, path);
-out.ending = parseExtras(lines, firstTs, lastTs).ending;
+const extras = parseExtras(lines, firstTs, lastTs);
+out.ending = extras.ending;
 const presentmon = readPresentMon(presentMonCsvForLog(lines, path));
 if (presentmon) out.presentmon = presentmon;
 
@@ -61,6 +63,12 @@ const missingBy = out.missingTextures;
 const driverEvents = out.driverEvents;
 const failures = out.failures;
 const { slowLists, slowCmds, hangs } = details;
+
+// The speed work's lines (capabilities, thread clock, table constants, buffer copies, settle reasons, pipelines left
+// out), over the same part of the run compare-runs measures: after the settle line, when there is one.
+const settledAt = lines.findIndex((line) => /harness: settled at/.test(line));
+const speed = aggregate(collect(lines, settledAt >= 0 ? settledAt + 1 : 0));
+out.speedLines = speed;
 
 if (asJson) {
   console.log(JSON.stringify(out, null, 2));
@@ -102,6 +110,22 @@ if (out.costs) {
   console.log(
     `Last frame: ${f(last.ms)} ms — preparing ${f(last.preparing)} (copies ${f(last.copiesMs)} ms / ${f(last.copiesMb)} MB, textures ${f(last.texturesMs)} ms / ${f(last.texturesMb)} MB), GPU ${f(last.gpuMs)} ms, readback ${f(last.backMs)} ms / ${f(last.backMb)} MB; draws ${last.draws}, dropped ${last.dropped} (${last.making} being made), indirect ${last.indirect}`,
   );
+}
+// A run under a capture tool: its frame is not comparable, and its exit code is the tool's.
+if (lines.some((line) => /^harness: captured by RenderDoc/.test(line))) {
+  console.log("Captured: RenderDoc \u2014 the frame is not comparable, and the exit code is RenderDoc's.");
+}
+// A run under the GPU profiler: its frame times are the profiler's, and its exit code is Nsight's.
+if (lines.some((line) => /^harness: profiled by Nsight GPU Trace/.test(line))) {
+  console.log("Profiled: Nsight GPU Trace — frame times are not comparable, and the exit code is the profiler's.");
+}
+// The settle, when the run used the settled clock: when the scene was ready, or that it never was.
+if (extras.settled) {
+  console.log(
+    `Scene settled: ${extras.settled.seconds} s after the first heavy line (waiting ${extras.settled.waiting}, ${extras.settled.fps} fps).`,
+  );
+} else if (extras.settledTimeout) {
+  console.log('Scene never settled: the run hit --settled-timeout.');
 }
 // The picture first (a gotcha): what the recording shows, stretch by stretch, with the log's figures for the same
 // wall-clock time. A heavy scene that is black can no longer pass as "world reached".
@@ -149,6 +173,52 @@ if (slowCmds.length) {
   const top = [...slowCmds].sort((a, b) => b.ms - a.ms).slice(0, 8);
   console.log('- slowest commands:');
   for (const c of top) console.log(`  - ${c.ms} ms: ${c.desc.slice(0, 150)}`);
+}
+if (Object.keys(speed.leftOut).length) {
+  console.log('- left out:');
+  for (const [reason, perFrame] of Object.entries(speed.leftOut).sort((a, b) => b[1] - a[1])) {
+    console.log(`  - ${f(perFrame)} a frame: ${reason}`);
+  }
+}
+// What the speed work's lines say per frame: the card's capabilities, the two counter lines, and every settle
+// reason with its count and its milliseconds (not just the top three).
+const settleReasons = Object.entries(speed.settleReasons).sort((a, b) => (b[1].count ?? 0) - (a[1].count ?? 0));
+const hasSpeed =
+  speed.capabilities ||
+  speed.tableConstants.inPlace !== null ||
+  speed.bufferCopies.onCard !== null ||
+  settleReasons.length ||
+  Object.keys(speed.threads.named).length;
+if (hasSpeed) console.log('\n## Card and CPU per frame');
+if (speed.capabilities) console.log(`- host capabilities: ${speed.capabilities.raw}`);
+if (speed.tableConstants.inPlace !== null) {
+  console.log(`- table constants: ${f(speed.tableConstants.inPlace)} read in place, ${f(speed.tableConstants.copied)} copied`);
+}
+if (speed.bufferCopies.onCard !== null) {
+  console.log(
+    `- buffer copies: ${f(speed.bufferCopies.onCard)} on the card (${f(speed.bufferCopies.onCardMb)} MB), ` +
+      `${f(speed.bufferCopies.onCpu)} on the CPU (${f(speed.bufferCopies.onCpuMb)} MB), ` +
+      `${f(speed.bufferCopies.settled)} settled flights (${f(speed.bufferCopies.settledMb)} MB)`,
+  );
+}
+if (settleReasons.length) {
+  console.log('- settle reasons:');
+  for (const [reason, entry] of settleReasons) {
+    const parts = [];
+    if (entry.count !== null) parts.push(`${f(entry.count)} a frame`);
+    if (entry.ms !== null) parts.push(`${f(entry.ms)} ms`);
+    console.log(`  - ${reason}: ${parts.join(', ') || '—'}`);
+    for (const [sub, n] of Object.entries(entry.by)) console.log(`    - by ${sub}: ${f(n)}`);
+  }
+}
+const threads = Object.entries(speed.threads.named)
+  .sort((a, b) => b[1].user + b[1].kernel - (a[1].user + a[1].kernel))
+  .slice(0, 12);
+if (threads.length) {
+  console.log('\n## Threads');
+  for (const [name, entry] of threads) console.log(`- ${name}: ${f(entry.user + entry.kernel)} ms (${f(entry.pct)}%)`);
+  const total = speed.threads.total;
+  if (total) console.log(`- total: ${f(total.user + total.kernel)} ms (${f(total.pct)}%)`);
 }
 if (Object.keys(missingBy).length) {
   console.log('\n## Textures with no host copy');

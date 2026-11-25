@@ -246,7 +246,11 @@ export function parseRunDetails(path) {
 // heavy-watch.mjs appends this after it ends the game, before the summary is made.
 // A run that carries it was ended on purpose, whatever its last lines say.
 export const HARNESS_ENDED_RE =
-  /^harness: ended by --heavy-seconds after ([\d.]+) s of heavy scene\s*$/;
+  /^harness: ended by --(?:heavy|settled)-seconds after ([\d.]+) s of (heavy|settled) scene\s*$/;
+/// The settle marker run-world.sh's settled watcher appends, and the cap that ends an unsettled run.
+export const HARNESS_SETTLED_RE = /^harness: settled at (\d+) s \(waiting (\d+), ([\d.]+) fps\)\s*$/;
+export const HARNESS_SETTLE_TIMEOUT_RE =
+  /^harness: ended by --settled-timeout after ([\d.]+) s: the scene never settled\s*$/;
 
 // The runtime's own lines for how it ended: kernel.rs logs a title-chosen exit, main.rs logs the runtime's
 // normal end. run-world.sh appends the game process's own exit code before the summary.
@@ -433,7 +437,7 @@ export function parseExtras(lines, firstTs, lastTs) {
       kind: 'harness_ended',
       seconds,
       frame: null,
-      text: `ended by the harness after ${harnessEnded[1]} s of heavy scene`,
+      text: `ended by the harness after ${harnessEnded[1]} s of ${harnessEnded[2]} scene`,
     };
   } else if (removalIndex >= 0) {
     const text = `device removed @ ${removalSeconds === null ? '?' : removalSeconds} s, after logged frame ${removalFrame === null ? '—' : removalFrame}`;
@@ -472,7 +476,12 @@ export function parseExtras(lines, firstTs, lastTs) {
       ? { lastCompletedOp: explicitDred.lastCompletedOp, hungOp: explicitDred.hungOp ?? hung?.op ?? null }
       : null;
 
-  return { ending, hung, dred, settings: parseSettings(lines) };
+  const settledLine = lines.map((line) => line.match(HARNESS_SETTLED_RE)).find(Boolean);
+  const settled = settledLine
+    ? { seconds: num(settledLine[1]), waiting: num(settledLine[2]), fps: num(settledLine[3]) }
+    : null;
+  const settledTimeout = lines.some((line) => HARNESS_SETTLE_TIMEOUT_RE.test(line));
+  return { ending, hung, dred, settings: parseSettings(lines), settled, settledTimeout };
 }
 
 export function parseRunFile(path) {
