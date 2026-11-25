@@ -1,9 +1,9 @@
 # Working on this project with an agent
 
-victory-world coordinates work on VIctory, an open-source runtime that runs a console title's own code on a
-Windows PC and translates its GPU programs for Direct3D 12. Every contributor brings their own copy of the title;
-nothing from the game is stored here. Work happens in the open: issues are the job board, claims and run reports
-are public, and `world` moves only through reviewed pull requests.
+zslayer-pc-port-tools coordinates work on the project's runtime, a fork of VIctory, an open-source runtime that
+runs a console title's own code on a Windows PC and translates its GPU programs for Direct3D 12. Every contributor
+brings their own copy of the title; nothing from the game is stored here. Work happens in the open: issues are the
+job board, claims and run reports are public, and `world` moves only through reviewed pull requests.
 
 ## The rule everything else serves
 
@@ -25,7 +25,7 @@ repository exists to prevent.
 
 - **Commit only what may be published.** Assets, parts of the executable, shader dumps, decompiled or disassembled
   code, captures and any bulk extracted table stay in your local logs; names, paths and pointers may be committed.
-  Reason: the title is proprietary, and victory-world holds only what may be published.
+  Reason: the title is proprietary, and this repository holds only what may be published.
 - **Name a shader beside its 16-hex id, and build any names index from your own copy** (`victory shader-names`).
   Reason: a name helps everyone identify the work, and each contributor's index comes from the copy they already
   have, so the repository carries none.

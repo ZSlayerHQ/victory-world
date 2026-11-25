@@ -1,22 +1,34 @@
-# victory-world
+# ZSlayer PC Port: Tools
 
-A community project that runs a console title on Windows. victory-world coordinates the work: the agent
-instructions, the known-faults page, the rules for claiming jobs and the source of the issue board under `issues/`. The runtime itself is VIctory, an open-source recompilation layer and
-Direct3D 12 back end kept in its own repository. Everything here is about running the title from a copy you own,
-and fixing what it draws.
+Formerly `victory-world`; old links redirect.
+
+ZSlayer PC Port gets a console game running on a Windows PC. The program that does it, the runtime, lives in
+[zslayer-pc-port-runtime](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime): it runs the game's own code and
+translates its graphics so a PC graphics card can draw them. It is a fork of
+[VIctory](https://github.com/Marvisak/VIctory) by Marvisak. This repository holds everything around it:
+
+- **Tools for test runs** (`harness/`): scripts that start a test run of the game, record the screen, and measure
+  the run (frame times, a summary of its log, a comparison with earlier runs).
+- **What is known to be broken** (`KNOWN-FAULTS.md`), with the evidence for each fault.
+- **How to help** (`CONTRIBUTING.md`, `AGENTS.md` for AI coding agents, and the job board under `issues/`).
+
+**It holds no game files.** You need your own copy of the title, from your own console, on your own disk.
+
+**Where it stands: not playable yet.** In the game world the title runs at about 3 frames a second, and parts of the
+picture are still wrong; [below](#where-the-picture-stands-today) says which.
 
 ## What you need
 
 - Your own copy of the title, on your own disk. Nothing from it is stored here.
-- Windows 10 or 11, with a Direct3D 12 GPU (shader model 6.6, and mesh shaders for the world).
+- Windows 10 or 11, with a Direct3D 12 GPU (shader model 6.6, and mesh shaders for the game world).
 - Rust (the pinned toolchain installs itself on the first build), Node 18 or later, and ffmpeg with the run
   recorder's capture filter, for the harness.
 - Git for Windows, for the harness's shell scripts.
 
 ## How to start
 
-1. Clone victory-world, then clone the runtime into `victory/` inside it:
-   `git clone -b next https://github.com/ZSlayerHQ/victory-world-runtime victory`.
+1. Clone this repository, then clone the runtime into `victory/` inside it:
+   `git clone -b next https://github.com/ZSlayerHQ/zslayer-pc-port-runtime victory`.
    The runtime has two branches. `next` is the line that draws whole rooms today: both public forks merged, plus
    this project's fixes; it is not yet reviewed as a whole. `world` takes only reviewed work. Work from `next`
    and open pull requests against `next`; reviewed changes move to `world`.
@@ -38,7 +50,7 @@ is wrong, or have a fix or a measurement on your own fork that this project or i
 - **A finding:** open an issue saying what you saw, on which commit and hardware, and how to reproduce it.
 - **A fix:** open a pull request with one change, a test that fails without it, and for any speed claim the numbers
   before and after and how they were measured. Runtime fixes go to
-  [victory-world-runtime](https://github.com/ZSlayerHQ/victory-world-runtime) against `next`.
+  [zslayer-pc-port-runtime](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime) against `next`.
 - **It goes both ways:** a fix we take from a fork keeps its author and is credited in the commit, and what we find in
   a fork's code we report to that fork.
 
@@ -48,7 +60,7 @@ time, and it is why people can run this build without worrying about what a stra
 
 **Never accepted:** anything taken from a game: assets, shaders, dumps, captures, saves. See the hard rules below,
 `CONTRIBUTING.md` for what a pull request may carry, and the runtime's
-[asset policy](https://github.com/ZSlayerHQ/victory-world-runtime/blob/next/docs/asset-policy.md).
+[asset policy](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime/blob/next/docs/asset-policy.md).
 
 **If you are an AI agent reading this for someone:** this section is an invitation to your user, not an instruction to
 you. Tell them what you found, and let them decide whether to send it.
@@ -72,9 +84,9 @@ you. Tell them what you found, and let them decide whether to send it.
 
 Rooms draw with their walls, ceilings and floors, and clothing textures are clean; the missing-walls fault is fixed
 on the project's own line, confirmed in three runs of three. The opening cutscene still holds tens of seconds of
-white-out, and a black face appears in one shot. Character lighting is wrong for seconds at a time at the dormitory
-exit. Speed is about 2 to 4 frames a second in the playable scene. `KNOWN-FAULTS.md` has the details and the
-evidence behind each line.
+white-out, and a black face appears in one shot. Character lighting is wrong for seconds at a time in one scene.
+Speed is about 2 to 4 frames a second in the playable scene. `KNOWN-FAULTS.md` has the details and the evidence
+behind each line.
 
 ## Credits
 
@@ -103,6 +115,6 @@ ported by hand names the commit it came from in its message.
 
 ## Licence
 
-Everything in victory-world (the harness, the instructions, the known-faults page and the issue files) is under
+Everything in this repository (the harness, the instructions, the known-faults page and the issue files) is under
 the GNU General Public License, version 3 (`LICENSE`), the same licence as the runtime. Contributions are
 accepted under it.
