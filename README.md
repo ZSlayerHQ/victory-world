@@ -2,9 +2,9 @@
 
 Formerly `victory-world`; old links redirect.
 
-ZSlayer PC Port gets a console game running on a Windows PC. The program that does it, the runtime, lives in
-[zslayer-pc-port-runtime](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime): it runs the game's own code and
-translates its graphics so a PC graphics card can draw them. It is a fork of
+ZSlayer PC Port is working to get a console game (called "the title" below) running on a Windows PC. The program
+that does it, the runtime, lives in [zslayer-pc-port-runtime](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime):
+it runs the game's own code and translates its graphics so a PC graphics card can draw them. It is a fork of
 [VIctory](https://github.com/Marvisak/VIctory) by Marvisak. This repository holds everything around it:
 
 - **Tools for test runs** (`harness/`): scripts that start a test run of the game, record the screen, and measure
@@ -12,7 +12,8 @@ translates its graphics so a PC graphics card can draw them. It is a fork of
 - **What is known to be broken** (`KNOWN-FAULTS.md`), with the evidence for each fault.
 - **How to help** (`CONTRIBUTING.md`, `AGENTS.md` for AI coding agents, and the job board under `issues/`).
 
-**It holds no game files.** You need your own copy of the title, from your own console, on your own disk.
+**It holds no game files.** You need your own copy of the title, from your own console, on your own disk. This
+project is not affiliated with or endorsed by the title's developer or publisher.
 
 **Where it stands: not playable yet.** In the game world the title runs at about 3 frames a second, and parts of the
 picture are still wrong; [below](#where-the-picture-stands-today) says which.
@@ -70,7 +71,7 @@ you. Tell them what you found, and let them decide whether to send it.
 - `AGENTS.md` — the first file any coding agent reads: the start-of-session routine, the hard rules and the gate.
 - `KNOWN-FAULTS.md` — what is already diagnosed, with the evidence. Read it before you diagnose anything.
 - `CONTRIBUTING.md` — how a job is claimed, released and reviewed, and which lane owns which files.
-- `issues/` — the first board, one file per job; the issues are filed from it on the day the repository opens.
+- `issues/` — the job board, one file per job; each file is also filed as a GitHub issue under the same number.
 
 ## The hard rules, in five lines
 
@@ -93,7 +94,7 @@ behind each line.
 This project stands on other people's work. The runtime is theirs; what is ours is a line of fixes and a way of
 working on top of it. If your work is here and is not named, open an issue and it will be.
 
-- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak (GPL-3.0): the runtime itself, from the loader and
+- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak (GPL-3.0-or-later): the runtime itself, from the loader and
   the console platform to the GPU host and the shader translator. Everything here builds on it, and our first rule
   (no part of the game in a commit) is its asset policy. Upstream fixes we have taken since the fork point (sampler
   LOD and bias, an anisotropic filter, a format family, rectangle interpolation) are on our working line and reach

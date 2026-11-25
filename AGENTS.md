@@ -32,8 +32,8 @@ repository exists to prevent.
 - **Work offline and leave the console's protections alone.** The runtime runs a copy the user already has.
   Reason: defeating encryption is not part of this project and would expose it to takedown.
 - **Change no registry keys.** Reason: the runtime must work with a contributor's machine as it is.
-- **Write "the title", not its name, and keep that name out of file and folder names.** Reason: the project's
-  public name is undecided.
+- **Write "the title", not its name, and keep that name out of file and folder names.** Reason: the project is
+  not affiliated with the title's owners, so nothing it publishes uses the title's name.
 
 ## Reporting a run
 
