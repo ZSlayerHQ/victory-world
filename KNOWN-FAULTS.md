@@ -19,7 +19,7 @@ the logs stay on the machines that made them.
   scissor, shell whole); the adopted fork's author reports it in five runs of seven; a sibling fork's view guard
   (commits `c6dc4d8c` with `10ea38ed`) is claimed to bring the walls back in two runs of two; a sibling fork's build
   (`joshuu/victory-amd` at `f25e7352`), run unmodified on an RTX 5090, drew walls, ceiling and floor in the first
-  playable room and the dormitory in one launch (run `amd-fork`).
+  playable room and a later room in one launch (run `amd-fork`).
 - **Issues:** [01](issues/01-view-guard.md), [02](issues/02-room-decision-inputs.md), [03](issues/03-scissor-run.md)
 
 ## Most dropped draws are one switched-off feature

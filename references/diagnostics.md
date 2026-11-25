@@ -1,7 +1,7 @@
 # Diagnostics tools
 
 the maintainer, the channel a message. In priority order. None is verified yet: **check each tool's docs before wiring it in**, for
-every version, support or command-line claim below. Install needs: a gotcha, and archived a gotcha (`archive/session-docs/GOTCHAS.md`).
+every version, support or command-line claim below, and for what it needs installed.
 
 1. **NVIDIA Nsight Aftermath (SDK).** A GPU crash dump at a hang or device removal that names the shader and
    instruction running. Serves the mesh hangs, H1 and H2 (Phase 2). Headless: the SDK decodes a dump to JSON. Needs
@@ -20,7 +20,7 @@ every version, support or command-line claim below. Install needs: a gotcha, and
 5. **NVIDIA Nsight Graphics** (GPU Trace, the shader profiler). Per-pass and per-shader cost on the 5090. Serves
    Phase 7. Headless: whatever capture and export its command line offers.
 6. **Differential translation.** Translator bugs found without running the game: translate the same console shader
-   with VIctory and with Leonida (`leonida/tools/rdna2spirv.py`) and compare the results on fixtures; cross-check
+   with VIctory and with a second reference translator and compare the results on fixtures; cross-check
    VIctory's decoder against LLVM's AMDGPU disassembler (`llvm-objdump` for the matching gfx10 target). Serves
    Phases 3 to 5. Headless by nature: text diffs. A game shader is compared on this PC only; nothing derived from
    it is committed.
