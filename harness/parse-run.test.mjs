@@ -264,7 +264,7 @@ test('a stopped command with no marker reports an unknown pipeline, not a later 
     '2026-11-24T12:00:10.000000Z ERROR victory_gpu::host: host GPU device removed after a submission of 2 lists; ' +
     'breadcrumbs (done/count, list) ["1/1 None"]; a list stopped at command 250 of 552 (op 5), commands 249..251 between its barriers:; ' +
     'command 250 (op 5): no marker; a list stopped at command 0 of 2 (op 46); list 2 of 11, of its 3: ' +
-    'dispatch 33x33x6 [compute 19e215b47ff9112a] | 19e215b47ff9112a: u4=0x1 [heap 1: null]';
+    'dispatch 33x33x6 [compute fedcba9876543210] | fedcba9876543210: u4=0x1 [heap 1: null]';
   const { details, firstTs, lastTs } = parseLogLines([line], 'synthetic.log');
   assert.equal(details.hangs.length, 1);
   assert.equal(details.hangs[0].command, 'no marker');
@@ -287,7 +287,7 @@ test('summarize-run: a markerless stopped command names no pipeline', (t) => {
       '2026-11-24T12:00:10.000000Z ERROR victory_gpu::host: host GPU device removed after a submission of 2 lists; ' +
         'breadcrumbs (done/count, list) ["1/1 None"]; a list stopped at command 250 of 552 (op 5), commands 249..251 between its barriers:; ' +
         'command 250 (op 5): no marker; a list stopped at command 0 of 2 (op 46); list 2 of 11, of its 3: ' +
-        'dispatch 33x33x6 [compute 19e215b47ff9112a] | 19e215b47ff9112a: u4=0x1 [heap 1: null]',
+        'dispatch 33x33x6 [compute fedcba9876543210] | fedcba9876543210: u4=0x1 [heap 1: null]',
       '',
     ].join('\n'),
   );
@@ -297,7 +297,7 @@ test('summarize-run: a markerless stopped command names no pipeline', (t) => {
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /stopped at command 250\/552 \(op 5\): pipeline unknown \(no marker\)/);
-  assert.equal(result.stdout.includes('19e215b47ff9112a'), false, result.stdout);
+  assert.equal(result.stdout.includes('fedcba9876543210'), false, result.stdout);
 });
 
 test('a harness-ended run says so, ahead of a device removal or a crash in the same log', () => {
@@ -320,6 +320,26 @@ test('a harness-ended run says so, ahead of a device removal or a crash in the s
 
   // Without the line the same log is a device removal, so the new line is what changes the ending.
   assert.equal(parseExtras(lines.slice(0, 3), firstTs, lastTs).ending.kind, 'device_removed');
+});
+
+test('a settled run carries its settle time and ends on the settled clock', () => {
+  const lines = [
+    '2026-11-24T12:00:00.000000Z  INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (0.2 preparing: copies 0.1 ms 0.2 MB, textures 0.0 ms 0.0 MB; 0.9 on the GPU; 0.0 copying back 0.0 MB), 12 draws/frame, dropped 0 without a host pipeline (0 being made) and 1 indirect',
+    'harness: settled at 57 s (waiting 1558, 2.9 fps)',
+    'harness: ended by --settled-seconds after 75 s of settled scene',
+  ];
+  const { firstTs, lastTs } = parseLogLines(lines, 'synthetic.log');
+  const extras = parseExtras(lines, firstTs, lastTs);
+  assert.deepEqual(extras.settled, { seconds: 57, waiting: 1558, fps: 2.9 });
+  assert.equal(extras.settledTimeout, false);
+  assert.equal(extras.ending.text, 'ended by the harness after 75 s of settled scene');
+
+  const timedOut = [
+    'harness: ended by --settled-timeout after 600 s: the scene never settled',
+  ];
+  const timeout = parseExtras(timedOut, firstTs, lastTs);
+  assert.equal(timeout.settled, null);
+  assert.equal(timeout.settledTimeout, true);
 });
 
 test('host mesh pipeline refused counts as a refused pipeline too', () => {

@@ -16,6 +16,9 @@
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+# VICTORY_BUILDS and VICTORY_REPO: the environment, else harness/local.env, else the main PC's paths below.
+. "$HERE/local-env.sh"
+load_local_env "$HERE"
 BUILDS=${VICTORY_BUILDS:-/snapshots}
 REPO=${VICTORY_REPO:-<project>/victory}
 PROFILE=diag

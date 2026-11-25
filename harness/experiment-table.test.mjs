@@ -295,7 +295,7 @@ test('experiment table: a stopped command with no marker has an unknown pipeline
       '2026-11-24T12:15:10.000000Z ERROR victory_gpu::host: host GPU device removed after a submission of 2 lists; ' +
         'breadcrumbs (done/count, list) ["1/1 None"]; a list stopped at command 250 of 552 (op 5), commands 249..251 between its barriers:; ' +
         'command 250 (op 5): no marker; a list stopped at command 0 of 2 (op 46); list 2 of 11, of its 3: ' +
-        'dispatch 33x33x6 [compute 19e215b47ff9112a] | 19e215b47ff9112a: u4=0x1 [heap 1: null]',
+        'dispatch 33x33x6 [compute 0123456789abcdef] | 0123456789abcdef: u4=0x1 [heap 1: null]',
       '',
     ].join('\n'),
   );

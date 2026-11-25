@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // One markdown table of world runs (one row per log) plus a shader-translation-failure cross-tab.
 // usage: node experiment-table.mjs [--json] <log>...
+import { loadLocalEnv } from './local-env.mjs';
 import { parseRunFile } from './parse-run.mjs';
 import { presentMonCsvForLog, readPresentMon } from './presentmon.mjs';
+
+// A log without a capture: line finds its PresentMon CSV under this machine's captures root.
+loadLocalEnv();
 
 const DASH = '—';
 const args = process.argv.slice(2);
