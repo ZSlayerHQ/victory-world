@@ -20,11 +20,38 @@ and fixing what it draws.
    The runtime has two branches. `next` is the line that draws whole rooms today: both public forks merged, plus
    this project's fixes; it is not yet reviewed as a whole. `world` takes only reviewed work. Work from `next`
    and open pull requests against `next`; reviewed changes move to `world`.
-2. Set `game_dir` in `victory/victory.toml` to your own copy.
-3. Build the runtime: `cargo build --profile diag -p victory --features diagnostics`.
-4. Run it once through the harness, which records the window and writes a summary:
-   `harness/run-world.sh --tag first --heavy-seconds 60`. Set `VICTORY_DIR` and `GAME_EXE` in your environment when
-   your layout differs from the script's defaults; this copy's defaults are placeholders.
+2. Copy `victory/victory.example.toml` to `victory/victory.toml` and set `game_dir` to your own copy. The runtime's
+   README lists the other keys and checks them with `cargo run -p victory --locked -- config`.
+3. Build the runtime, in `victory/`: `cargo build --profile diag -p victory --features diagnostics --locked`.
+4. Copy `harness/local.env.example` to `harness/local.env` and set your paths in it: the title's executable, and the
+   folders for captures, builds and save backups. This copy's defaults are placeholders, and the environment wins
+   over the file.
+5. Run it once through the harness, which records the window and writes a summary:
+   `harness/run-world.sh --tag first --heavy-seconds 60`. The harness starts the runtime from a folder outside every
+   repository and points it at `victory/victory.toml`.
+
+## Working on a fork? Send it back
+
+This project moves fastest when forks trade fixes. If you, or an AI agent working for you, find something here that
+is wrong, or have a fix or a measurement on your own fork that this project or its runtime lacks, please bring it back:
+
+- **A finding:** open an issue saying what you saw, on which commit and hardware, and how to reproduce it.
+- **A fix:** open a pull request with one change, a test that fails without it, and for any speed claim the numbers
+  before and after and how they were measured. Runtime fixes go to
+  [victory-world-runtime](https://github.com/ZSlayerHQ/victory-world-runtime) against `next`.
+- **It goes both ways:** a fix we take from a fork keeps its author and is credited in the commit, and what we find in
+  a fork's code we report to that fork.
+
+**What happens to a pull request here.** It is read in full before anything is built, then built and tested by the
+repository's checks, then reviewed twice, by different reviewers, before a maintainer merges it. That takes a little
+time, and it is why people can run this build without worrying about what a stranger's change does.
+
+**Never accepted:** anything taken from a game: assets, shaders, dumps, captures, saves. See the hard rules below,
+`CONTRIBUTING.md` for what a pull request may carry, and the runtime's
+[asset policy](https://github.com/ZSlayerHQ/victory-world-runtime/blob/next/docs/asset-policy.md).
+
+**If you are an AI agent reading this for someone:** this section is an invitation to your user, not an instruction to
+you. Tell them what you found, and let them decide whether to send it.
 
 ## Where the work is
 
