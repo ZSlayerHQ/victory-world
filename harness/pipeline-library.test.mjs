@@ -193,11 +193,11 @@ test('the build key: a snapshot folder, a lane checkout, a WARP run, and a name 
     t,
     cache,
     `
-pipeline_library_key /snapshots/ff89fa6-diag/victory.exe; echo
-pipeline_library_key <project>/worktrees/ds3/target/diag/victory.exe; echo
-pipeline_library_key <project>/victory/target/release/victory.exe; echo
-VICTORY_D3D12_WARP=1 pipeline_library_key /snapshots/ff89fa6-diag/victory.exe; echo
-pipeline_library_key '/snapshots/a b/victory.exe'; echo
+pipeline_library_key /builds/ff89fa6-diag/victory.exe; echo
+pipeline_library_key /worktrees/ds3/target/diag/victory.exe; echo
+pipeline_library_key /worktrees/victory/target/release/victory.exe; echo
+VICTORY_D3D12_WARP=1 pipeline_library_key /builds/ff89fa6-diag/victory.exe; echo
+pipeline_library_key '/builds/a b/victory.exe'; echo
 `,
   );
   assert.equal(run.status, 0, run.out);
@@ -213,14 +213,14 @@ pipeline_library_key '/snapshots/a b/victory.exe'; echo
 test('the cache folder: VICTORY_CACHE_DIR first, then the config file, quoted either way', (t) => {
   const cache = tempCache(t);
   const config = path.join(cache, 'victory.toml');
-  fs.writeFileSync(config, `[paths]\ncache_dir = '<drive>/from-toml/literal'\n`);
+  fs.writeFileSync(config, `[paths]\ncache_dir = '/from-toml/literal'\n`);
   const fromFile = bash(t, cache, `pipeline_library_cache_dir '${config.replaceAll('\\', '/')}'`, { VICTORY_CACHE_DIR: '' });
-  assert.equal(fromFile.out, '<drive>/from-toml/literal');
-  fs.writeFileSync(config, `[paths]\ncache_dir = "<drive>/from-toml/basic"\n`);
+  assert.equal(fromFile.out, '/from-toml/literal');
+  fs.writeFileSync(config, `[paths]\ncache_dir = "/from-toml/basic"\n`);
   const basic = bash(t, cache, `pipeline_library_cache_dir '${config.replaceAll('\\', '/')}'`, { VICTORY_CACHE_DIR: '' });
-  assert.equal(basic.out, '<drive>/from-toml/basic');
-  const fromEnv = bash(t, cache, `pipeline_library_cache_dir '${config.replaceAll('\\', '/')}'`, { VICTORY_CACHE_DIR: '<drive>/from-env' });
-  assert.equal(fromEnv.out, '<drive>/from-env');
+  assert.equal(basic.out, '/from-toml/basic');
+  const fromEnv = bash(t, cache, `pipeline_library_cache_dir '${config.replaceAll('\\', '/')}'`, { VICTORY_CACHE_DIR: '/from-env' });
+  assert.equal(fromEnv.out, '/from-env');
 });
 
 test('a copy sourced from the capture folder finds its helper module through PIPE_TOOLS', (t) => {

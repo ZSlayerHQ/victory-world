@@ -1,0 +1,5 @@
+# Every text file is stored and checked out with LF on every machine, whatever core.autocrlf says: the harness
+# reads and runs the shell scripts, and its tests match their line endings.
+* text=auto eol=lf
+*.sh text eol=lf
+*.mjs text eol=lf

@@ -132,7 +132,9 @@ test('the command prints the report, refuses an --out inside a repository, and r
   assert.equal(ok.status, 0, ok.stderr);
   assert.match(ok.stdout, /## frame-1/);
   assert.match(ok.stdout, /# all-zero targets\n- frame-1-0-64x32-f10\.png/);
-  const insideRepo = spawnSync(process.execPath, [script, capture, '--out', path.join(here, 'report.txt')], { encoding: 'utf8' });
+  const repo = path.join(dir, 'repo');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  const insideRepo = spawnSync(process.execPath, [script, capture, '--out', path.join(repo, 'report.txt')], { encoding: 'utf8' });
   assert.equal(insideRepo.status, 2, 'an --out inside the repository is refused');
   assert.match(insideRepo.stderr, /outside every repository/);
 });
