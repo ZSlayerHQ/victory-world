@@ -21,7 +21,9 @@
 # command. The queue passes its own environment through and never sets that variable itself.
 set -uo pipefail
 
-HERE=$(cd "$(dirname "$0")" && pwd)
+# Windows paths throughout: node is a native program, and under a Capy terminal (MSYS_NO_PATHCONV=1 and
+# MSYS2_ARG_CONV_EXCL=*) a /c/... argument reaches it as C:\c\... so `node "$HERE/..."` fails to load.
+HERE=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
 # VICTORY_WORKTREES and GAME_EXE: the environment, else harness/local.env, else the main PC's paths below.
 . "$HERE/local-env.sh"
 load_local_env "$HERE"
@@ -33,6 +35,12 @@ if [ -z "$GAME_EXE" ] && [ -f "$HERE/run-world.sh" ]; then
   GAME_EXE=$(sed -n 's/^GAME_EXE=\${GAME_EXE:-"\(.*\)"}$/\1/p' "$HERE/run-world.sh" | head -n 1)
 fi
 GAME_EXE=${GAME_EXE:-"<game executable>"}
+# The wrapper stages the executable beside the dump's manifest when the dump has no copy of it (game-dir.mjs), so the
+# game's command line carries the staged path; the timeout below has to match that one, not the configured one. A dump
+# game-dir.mjs cannot resolve leaves this as it was, and the wrapper's own refusal ends the line.
+QUEUE_GAME=(--exe "$GAME_EXE" --stage "${GAME_STAGE:-${VICTORY_CAPTURES:-/captures}/game}")
+[ -n "${GAME_MANIFEST:-}" ] && QUEUE_GAME+=(--manifest "$GAME_MANIFEST")
+QUEUE_STAGED=$(node "$HERE/game-dir.mjs" prepare "${QUEUE_GAME[@]}" 2>/dev/null) && GAME_EXE=$QUEUE_STAGED
 MAX_SECONDS=1500
 DRY_RUN=0
 QUEUE=

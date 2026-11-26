@@ -10,7 +10,9 @@
 # from the environment, else harness/local.env on a machine that has one, else the main PC's E: paths below.
 set -u
 
-HERE=$(cd "$(dirname "$0")" && pwd)
+# Windows paths throughout: node is a native program, and under a Capy terminal (MSYS_NO_PATHCONV=1 and
+# MSYS2_ARG_CONV_EXCL=*) a /c/... argument reaches it as C:\c\... so every `node "$HERE/..."` below fails to load.
+HERE=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
 . "$HERE/local-env.sh"
 load_local_env "$HERE"
 VICTORY_DIR=${VICTORY_DIR:-$HERE/../victory}
@@ -151,6 +153,15 @@ if [ ! -x "$BIN" ]; then
 fi
 BIN_DIR=$(cd "$(dirname "$BIN")" && { pwd -W 2>/dev/null || pwd; })
 BIN="$BIN_DIR/$(basename "$BIN")"
+# The title reads its id and storage quota from the MicrosoftGame.Config beside its executable, so the two have to be
+# in one folder; without the manifest it reaches System Init with title id 00000000 and dies. GAME_EXE names the
+# executable wherever it lives, and game-dir.mjs finds the dump it belongs to: when the dump has no copy it hardlinks
+# the executable in beside the manifest, under a stage folder, and one clear sentence replaces the crash when the dump
+# or the executable cannot be found. GAME_MANIFEST names the dump outright and GAME_STAGE the stage folder.
+GAME_BEFORE=$GAME_EXE
+GAME_ARGS=(--exe "$GAME_EXE" --stage "${GAME_STAGE:-${CAPTURES%/}/game}")
+[ -n "${GAME_MANIFEST:-}" ] && GAME_ARGS+=(--manifest "$GAME_MANIFEST")
+GAME_EXE=$(node "$HERE/game-dir.mjs" prepare "${GAME_ARGS[@]}") || exit 2
 # The runtime's data guard refuses to start the title from inside a git work tree: run from the snapshot folder
 # when the binary is in one, otherwise from a fresh folder under the capture folder, and refuse loudly if neither
 # is outside a work tree.
@@ -219,6 +230,9 @@ echo
   echo "harness env: cwd=$RUN_CWD"
   # The volumes the run reads and writes, once: the game's, and the cache's and data's when on other drives.
   node "$HERE/disk-usage.mjs" --config "$SAVE_CONFIG" "game=$(dirname "$GAME_EXE")" || true
+  # The stage folder, when the executable had to be hardlinked beside the manifest: the launch reads from there, not
+  # from the folder GAME_EXE named.
+  if [ "$GAME_EXE" != "$GAME_BEFORE" ]; then echo "harness env: game-staged=$GAME_EXE"; fi
   [ -n "$ROUTE" ] && echo "harness env: route=$ROUTE"
   [ -n "$SETTLED_SECONDS" ] && echo "harness env: settled-seconds=$SETTLED_SECONDS"
   [ -n "$SETTLED_TIMEOUT" ] && echo "harness env: settled-timeout=$SETTLED_TIMEOUT"

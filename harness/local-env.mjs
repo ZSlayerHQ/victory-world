@@ -16,7 +16,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const LOCAL_ENV_NAMES = Object.freeze([
-  'GAME_EXE', // the title's executable in the dump (run-world.sh, run-queue.sh)
+  'GAME_EXE', // the title's executable in the dump (run-world.sh, run-queue.sh, game-dir.mjs)
+  'GAME_MANIFEST', // the dump's MicrosoftGame.Config, when the executable's neighbours do not hold it (game-dir.mjs)
+  'GAME_STAGE', // where a dump with no executable of its own is mirrored in hardlinks (game-dir.mjs)
   'VICTORY_CAPTURES', // the root each run's capture folder is made under (run-world.sh, presentmon.mjs)
   'VICTORY_BUILDS', // snapshot builds (snapshot-build.sh)
   'VICTORY_REPO', // the victory checkout snapshot-build.sh --list asks for commit subjects
