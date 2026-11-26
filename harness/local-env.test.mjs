@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { LOCAL_ENV_NAMES, loadLocalEnv, parseLocalEnv } from './local-env.mjs';
 import { captureFolderFromLog, capturesRoot } from './presentmon.mjs';
 import { DEFAULT_SAVE_BACKUPS, saveBackupsRoot } from './save-snapshot.mjs';
+import { NO_LOCAL_ENV } from './test-isolation.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BS = String.fromCharCode(92);
@@ -63,6 +64,12 @@ test('parse: VICTORY_ALLOW_OBS can never come from the file (a decision)', () =>
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /VICTORY_ALLOW_OBS/);
   assert.equal(LOCAL_ENV_NAMES.includes('VICTORY_ALLOW_OBS'), false);
+});
+
+test('parse: the overlay path is a name the file may set', () => {
+  const { values, warnings } = parseLocalEnv('VICTORY_PRECOMPILE_JSON=<drive>/stream/precompile.json\n');
+  assert.deepEqual(values, { VICTORY_PRECOMPILE_JSON: '<drive>/stream/precompile.json' });
+  assert.equal(warnings.length, 0);
 });
 
 test('parse: a malformed line is skipped with its line number only', () => {
@@ -122,6 +129,8 @@ test('run-world.sh builds the capture folder under VICTORY_CAPTURES', (t) => {
       VICTORY_LOCAL_ENV: path.join(dir, 'none.env'),
       VICTORY_CAPTURES: caps,
       VICTORY_BIN: path.join(dir, 'no-such-victory.exe'),
+      // run-world.sh refuses a direct run that would skip the lock; this test is about the capture folder.
+      WORLD_RUN_HOLDS_LOCK: '1',
     }),
   });
   assert.equal(result.status, 2, 'stops at the missing binary');
@@ -147,4 +156,30 @@ test('capture root: VICTORY_CAPTURES, else /captures, used for the log-name fall
 test('save backups root: VICTORY_SAVE_BACKUPS, else the default beside the user home', () => {
   assert.equal(saveBackupsRoot({}), DEFAULT_SAVE_BACKUPS);
   assert.equal(saveBackupsRoot({ VICTORY_SAVE_BACKUPS: `D:${BS}saves${BS}` }), `D:${'/'}saves`);
+});
+
+test('a hostile local.env cannot reach a test that points the loader away from it', (t) => {
+  // A file that does what this machine's does: a captures root holding a matching PresentMon CSV. If the loader
+  // read it, the experiment table would gain the PresentMon columns. The suite's spawns use isolatedEnv(), which
+  // points the loader at NO_LOCAL_ENV; naming the hostile file explicitly must still prove the file is effective.
+  const { dir } = tempFile(t, 'unused', '');
+  const caps = path.join(dir, 'hostile-captures');
+  const log = path.join(dir, '20261124-120000-alpha.log');
+  const csv = path.join(caps, '20261124-120000-alpha', 'presentmon.csv');
+  fs.mkdirSync(path.dirname(csv), { recursive: true });
+  fs.writeFileSync(csv, 'Application,ProcessID,FrameTime,GPUBusy\r\nvictory.exe,100,10,2\r\nvictory.exe,100,20,4\r\n');
+  fs.writeFileSync(log, '2026-11-24T12:00:00Z  INFO victory_gpu::frame: frame interval interval=33.333ms\n');
+  const hostile = path.join(dir, 'local.env');
+  fs.writeFileSync(hostile, `VICTORY_CAPTURES=${caps.split(BS).join('/')}\n`);
+
+  const table = (env) =>
+    spawnSync(process.execPath, [path.join(here, 'experiment-table.mjs'), log], { encoding: 'utf8', env });
+
+  const isolated = table(bareEnv({ VICTORY_LOCAL_ENV: NO_LOCAL_ENV }));
+  assert.equal(isolated.status, 0, isolated.stderr);
+  assert.equal(isolated.stdout.includes('median frame ms'), false, 'the isolated run must not see the hostile root');
+
+  const named = table(bareEnv({ VICTORY_LOCAL_ENV: hostile }));
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stdout, /median frame ms/, 'the file itself still works when a test names it');
 });

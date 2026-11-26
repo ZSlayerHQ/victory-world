@@ -1,7 +1,7 @@
 # 21 — The GPU test binary's access violation
 
 - **Title:** Find the GPU test binary's access violation
-- **Lane:** Harness and tools
+- **Lane:** Tools and harness
 - **Files owned:** to be confirmed by the lead
 - **Symptom:** the runtime's GPU test binary dies with an access violation about one run in five to ten. It has not been tied to a fault in the runtime.
 - **Evidence:** several test runs on one machine; no reproduction yet.

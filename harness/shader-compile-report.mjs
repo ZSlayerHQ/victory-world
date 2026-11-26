@@ -11,6 +11,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripControl } from './parse-run.mjs';
+
+// A `tracing` line's prefix: `2026-11-26T04:56:35.501134Z  INFO victory_gpu::pipeline: `.
+const HEADER = /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+[A-Za-z]+\s+[\w:]+:\s*/;
+export const plain = (line) => stripControl(line).replace(HEADER, '');
 
 const N = String.raw`([\d,]+)`;
 const RE = {
@@ -22,8 +27,14 @@ const RE = {
   reason: new RegExp(`^\\s+${N}\\s{2}(.*?)\\s{2,}\\(e\\.g\\. (.*?)\\)\\s*$`),
   warm: new RegExp(`^warm-up: exit=(-?\\d+) after (\\d+) s`),
   // The translator's up-front and running progress lines.
-  total: new RegExp(`^progress\\s+total\\s+programs=${N}\\s+containers=${N}`),
-  progress: new RegExp(`^progress\\s+translated\\s+${N}\\s+of\\s+${N}\\s+refused=${N}\\s+failed_validation=${N}`),
+  total: new RegExp(`progress\\s+total\\s+programs=${N}\\s+containers=${N}`),
+  progress: new RegExp(`progress\\s+translated\\s+${N}\\s+of\\s+${N}\\s+refused=${N}\\s+failed_validation=${N}`),
+  // Today's warm log: one closing line with every total, and one line per program (translated or refused).
+  warmSummary: new RegExp(
+    `^warm\\s+${N}\\s+translated,\\s+${N}\\s+refused;\\s+${N}\\s+compute pipelines,\\s+${N}\\s+refused;\\s+([\\d.]+)\\s+s\\s*$`,
+  ),
+  translatedLine: /^shader translated\s+stage="(\w+)"\s+hash=([0-9a-f]+)/,
+  refusedLine: /^shader does not translate;.*?\bstage="(\w+)"\s+hash=([0-9a-f]+)/,
 };
 
 const num = (text) => (text === undefined ? null : Number(text.replace(/,/g, '')));
@@ -33,7 +44,15 @@ export function parse(warmLog, mainLog = null) {
   const lines = fs.readFileSync(warmLog, 'utf8').split(/\r?\n/);
   const out = { containers: null, duplicates: null, programs: null, translated: null, reasons: [] };
   const stage = (m) => ({ emitted: num(m?.[1]), programs: num(m?.[2]), validated: num(m?.[3]), pipelines: num(m?.[4]) });
-  for (const line of lines) {
+  const byStage = new Map();
+  const tally = (name, outcome) => {
+    const entry = byStage.get(name) ?? { translated: 0, refused: 0 };
+    entry[outcome] += 1;
+    byStage.set(name, entry);
+  };
+  let programLines = 0;
+  for (const raw of lines) {
+    const line = plain(raw);
     let m;
     if ((m = line.match(RE.containers))) {
       out.containers = num(m[1]);
@@ -49,10 +68,34 @@ export function parse(warmLog, mainLog = null) {
     } else if ((m = line.match(RE.programs))) {
       out.translated = num(m[1]);
       out.programs = num(m[2]);
+    } else if ((m = line.match(RE.warmSummary))) {
+      // What `victory warm` prints today, and the only line that states the warm-up's own totals.
+      out.translated = num(m[1]);
+      out.refusedNow = num(m[2]);
+      out.programs = num(m[1]) + num(m[2]);
+      out.computePipelines = num(m[3]);
+      out.computePipelinesRefused = num(m[4]);
+      out.warmSeconds = Number(m[5]);
+    } else if ((m = line.match(RE.translatedLine))) {
+      programLines += 1;
+      tally(m[1], 'translated');
+    } else if ((m = line.match(RE.refusedLine))) {
+      programLines += 1;
+      tally(m[1], 'refused');
     } else if ((m = line.match(RE.vp))) out.vertexPixel = stage(m);
     else if ((m = line.match(RE.cs))) out.compute = stage(m);
     else if ((m = line.match(RE.ms))) out.mesh = stage(m);
     else if ((m = line.match(RE.reason))) out.reasons.push({ count: num(m[1]), reason: m[2], example: m[3] });
+  }
+  if (programLines) {
+    out.programLines = programLines;
+    out.byStage = Object.fromEntries(byStage);
+    // A warm log cut before its closing line: the per-program lines still say what it got through.
+    if (out.programs === null) {
+      out.translated = [...byStage.values()].reduce((a, s) => a + s.translated, 0);
+      out.refusedNow = [...byStage.values()].reduce((a, s) => a + s.refused, 0);
+      out.programs = out.translated + out.refusedNow;
+    }
   }
   out.reasons.sort((a, b) => b.count - a.count);
   if (mainLog) {
@@ -66,6 +109,23 @@ export function parse(warmLog, mainLog = null) {
   return out;
 }
 
+/// Whether the log stated anything at all. A parser that silently reads a new format as every field null would
+/// otherwise report "no refusals" and exit 0.
+export function parsedAnything(parsed) {
+  return (
+    parsed.containers !== null ||
+    parsed.programs !== null ||
+    (parsed.programLines ?? 0) > 0 ||
+    parsed.packPrograms !== undefined ||
+    parsed.reasons.length > 0 ||
+    parsed.vertexPixel !== undefined ||
+    parsed.compute !== undefined ||
+    parsed.mesh !== undefined ||
+    parsed.computePipelines !== undefined ||
+    parsed.progressPrograms !== undefined
+  );
+}
+
 /// The per-program report file: tab-separated name, stage, outcome, reason, ms, dxil_bytes; a header row is
 /// accepted and columns are taken by name when it is there.
 export function parsePrograms(file) {
@@ -73,7 +133,13 @@ export function parsePrograms(file) {
   if (!lines.length) return [];
   const cells = (line) => line.split('\t');
   let order = ['name', 'stage', 'outcome', 'reason', 'ms', 'dxil_bytes'];
-  if (cells(lines[0])[0].trim().toLowerCase() === 'name') order = cells(lines.shift()).map((c) => c.trim().toLowerCase());
+  // The translator's own header names its first column `container`; a header is any first row that names an outcome
+  // column, whatever its first cell says, and extra columns (compute_pipeline) are carried but unused.
+  const first = cells(lines[0]).map((c) => c.trim().toLowerCase());
+  if (first.includes('outcome')) {
+    order = first.map((c) => (c === 'container' ? 'name' : c));
+    lines.shift();
+  }
   const number = (text) => (text === undefined || text.trim() === '' ? null : Number(text));
   return lines.map((line) => {
     const parts = cells(line);
@@ -145,7 +211,11 @@ export function report(parsed, { public: public_ = false, programs = null } = {}
     `- programs: ${fmt(parsed.translated)} translated of ${fmt(parsed.programs)} (${fmt(pct(parsed.translated, parsed.programs), 1)}%), ${fmt(refused)} refused`,
   );
   if (parsed.failedValidationNow !== undefined) out.push(`- failed validation: ${fmt(parsed.failedValidationNow)}`);
-  if (parsed.warmSeconds !== undefined) out.push(`- warm-up: exit ${parsed.warmExit}, ${parsed.warmSeconds} s`);
+  if (parsed.computePipelines !== undefined) {
+    out.push(`- compute pipelines: ${fmt(parsed.computePipelines)} made, ${fmt(parsed.computePipelinesRefused)} refused`);
+  }
+  if (parsed.warmExit !== undefined) out.push(`- warm-up: exit ${fmt(parsed.warmExit)}, ${fmt(parsed.warmSeconds)} s`);
+  else if (parsed.warmSeconds !== undefined) out.push(`- warm-up time: ${fmt(parsed.warmSeconds)} s`);
   out.push('');
   out.push('| Stage | Programs | Emitted | Validated | Failed validation | Pipelines |');
   out.push('|---|---|---|---|---|---|');
@@ -158,6 +228,14 @@ export function report(parsed, { public: public_ = false, programs = null } = {}
     out.push(
       `| ${name} | ${fmt(s?.programs)} | ${fmt(s?.emitted)} | ${fmt(s?.validated)} | ${fmt(validationFailures(s))} | ${fmt(s?.pipelines)} |`,
     );
+  }
+  if (parsed.byStage) {
+    out.push('', '| Stage (per-program lines) | Translated | Refused |', '|---|---|---|');
+    const order = [...STAGES.filter((name) => parsed.byStage[name]), ...Object.keys(parsed.byStage).filter((name) => !STAGES.includes(name))];
+    for (const name of order) {
+      const s = parsed.byStage[name];
+      out.push(`| ${name} | ${s.translated} | ${s.refused} |`);
+    }
   }
   out.push('', '| Refusals | Reason | Example |', '|---|---|---|');
   if (!parsed.reasons.length) out.push('| — | none stated | — |');
@@ -201,6 +279,10 @@ export function asJson(parsed, { public: public_ = false, programs = null } = {}
     translated: parsed.translated,
     refused: parsed.refusedNow ?? (parsed.programs !== null && parsed.translated !== null ? parsed.programs - parsed.translated : null),
     failedValidation: parsed.failedValidationNow ?? null,
+    computePipelines: parsed.computePipelines ?? null,
+    computePipelinesRefused: parsed.computePipelinesRefused ?? null,
+    programLines: parsed.programLines ?? null,
+    byStage: parsed.byStage ?? null,
     vertexPixel: parsed.vertexPixel ?? null,
     compute: parsed.compute ?? null,
     mesh: parsed.mesh ?? null,
@@ -260,6 +342,10 @@ function main(argv) {
     if (options.programs) programs = parsePrograms(options.programs);
   } catch (err) {
     console.error(`shader-compile-report: ${err.message}`);
+    return 1;
+  }
+  if (!parsedAnything(parsed)) {
+    console.error(`shader-compile-report: nothing parsed from ${positional[0]}; is this a warm log?`);
     return 1;
   }
   const view = { public: options.public, programs };

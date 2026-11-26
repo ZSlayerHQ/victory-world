@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { asJson, missing, parse, parsePrograms, report } from './shader-compile-report.mjs';
+import { asJson, missing, parse, parsePrograms, parsedAnything, report } from './shader-compile-report.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(here, 'shader-compile-report.mjs');
@@ -161,4 +161,94 @@ test('the command prints the report and refuses unknown arguments', (t) => {
   assert.equal(parsed.refused, 494);
   result = spawnSync(process.execPath, [script, '--nope'], { encoding: 'utf8' });
   assert.equal(result.status, 2);
+});
+
+// Today's warm log (2026-11-26): every per-program line is a colour-coded `tracing` line, and the only totals are
+// the closing `warm …` line. The shape is taken from harness/logs/20261126-045555-batch-world-prime.log.warm; every
+// name and number here is made up.
+const TODAY_HEADER = '\x1b[2m2026-11-26T04:56:35.501134Z\x1b[0m ';
+const TODAY_MODULE = '\x1b[2mvictory_gpu::pipeline\x1b[0m\x1b[2m:\x1b[0m ';
+const todayTranslated = (stage, hash) =>
+  `${TODAY_HEADER}\x1b[32m INFO\x1b[0m ${TODAY_MODULE}shader translated ` +
+  `\x1b[3mstage\x1b[0m\x1b[2m=\x1b[0m"${stage}" \x1b[3mhash\x1b[0m\x1b[2m=\x1b[0m${hash} ` +
+  '\x1b[3muser_data\x1b[0m\x1b[2m=\x1b[0m0 \x1b[3msamplers\x1b[0m\x1b[2m=\x1b[0m0';
+const todayRefused = (stage, hash) =>
+  `${TODAY_HEADER}\x1b[33m WARN\x1b[0m ${TODAY_MODULE}shader does not translate; its pipelines' draws are dropped ` +
+  `\x1b[3mstage\x1b[0m\x1b[2m=\x1b[0m"${stage}" \x1b[3mhash\x1b[0m\x1b[2m=\x1b[0m${hash} ` +
+  '\x1b[3merror\x1b[0m\x1b[2m=\x1b[0mconverter shader.dxil v1: GFX10 code at 0x1234: a made-up reason';
+const TODAY = [
+  todayTranslated('pixel', '0123456789abcdef'),
+  todayTranslated('pixel', '1111111111111111'),
+  todayTranslated('vertex', '2222222222222222'),
+  todayTranslated('compute', '3333333333333333'),
+  todayRefused('mesh', 'fedcba9876543210'),
+  'warm         4 translated, 1 refused; 2 compute pipelines, 0 refused; 7 s',
+];
+
+test("today's warm log: the closing warm line and the per-program lines, colour codes and all", (t) => {
+  const parsed = parse(tempFile(t, 'run.log.warm', TODAY));
+  assert.equal(parsed.programs, 5);
+  assert.equal(parsed.translated, 4);
+  assert.equal(parsed.refusedNow, 1);
+  assert.equal(parsed.warmSeconds, 7);
+  assert.equal(parsed.computePipelines, 2);
+  assert.equal(parsed.computePipelinesRefused, 0);
+  assert.equal(parsed.programLines, 5);
+  assert.deepEqual(parsed.byStage, {
+    pixel: { translated: 2, refused: 0 },
+    vertex: { translated: 1, refused: 0 },
+    compute: { translated: 1, refused: 0 },
+    mesh: { translated: 0, refused: 1 },
+  });
+  assert.equal(parsedAnything(parsed), true);
+  const text = report(parsed);
+  assert.match(text, /4 translated of 5 \(80\.0%\), 1 refused/);
+  assert.match(text, /- compute pipelines: 2 made, 0 refused/);
+  assert.match(text, /- warm-up time: 7 s/);
+  assert.match(text, /\| mesh \| 0 \| 1 \|/);
+  const json = asJson(parsed);
+  assert.equal(json.programLines, 5);
+  assert.deepEqual(json.byStage.mesh, { translated: 0, refused: 1 });
+});
+
+test("a log with nothing this parser knows exits non-zero instead of reporting no refusals", (t) => {
+  const warm = tempFile(t, 'run.log.warm', ['a line this parser does not know', '\x1b[2mnot a warm line\x1b[0m']);
+  assert.equal(parsedAnything(parse(warm)), false);
+  const result = spawnSync(process.execPath, [script, warm], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /nothing parsed/);
+});
+
+test('the warm log is read with its tracing prefixes, and the report header is not a program', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compile-report-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const warm = path.join(dir, 'run.log.warm');
+  fs.writeFileSync(
+    warm,
+    [
+      '2026-11-25T09:19:54.011627Z  INFO victory::translate: progress total programs=25758 containers=26599',
+      '2026-11-25T09:20:46.339299Z  INFO victory::translate: progress translated 643 of 25758 refused=2 failed_validation=0',
+      '2026-11-25T09:26:03.000000Z  INFO victory::translate: progress translated 25758 of 25758 refused=62 failed_validation=0',
+      '',
+    ].join('\n'),
+  );
+  const parsed = parse(warm);
+  assert.equal(parsed.progressPrograms, 25758);
+  assert.equal(parsed.progressDone, 25758);
+  assert.equal(parsed.refusedNow, 62);
+
+  const report = path.join(dir, 'translate-report.txt');
+  fs.writeFileSync(
+    report,
+    [
+      'container\tstage\toutcome\treason\tms\tdxil_bytes\tcompute_pipeline',
+      'a #0123456789abcdef\tcompute\ttranslated\t\t1.0\t120\t',
+      'b #fedcba9876543210\tpixel\trefused\ta reason\t2.0\t0\t',
+      '',
+    ].join('\n'),
+  );
+  const rows = parsePrograms(report);
+  assert.equal(rows.length, 2, 'the header is not a program');
+  assert.equal(rows[0].name, 'a #0123456789abcdef');
+  assert.equal(rows[1].outcome, 'refused');
 });

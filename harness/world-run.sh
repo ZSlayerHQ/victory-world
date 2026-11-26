@@ -1,6 +1,12 @@
 #!/bin/sh
 # The only way to start the game: one run at a time, and no real-GPU run while OBS is up (a GPU hang resets the
-# display driver and blacks out every monitor). Arguments go to run-world.sh unchanged; VICTORY_DIR picks the build.
+# display driver and blacks out every monitor). Arguments go to run-world.sh unchanged, --require-quiet included;
+# VICTORY_DIR picks the build.
+#
+# The run does not read its scripts from the live files: run-world.sh and every file it sources are copied into the
+# run's capture folder, and the copy runs. The body is one function, called once at the end, so the shell has read
+# all of it before running any of it.
+main() {
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && { pwd -W 2>/dev/null || pwd; })
 LOCK="$HERE/run.lock"
@@ -27,6 +33,13 @@ if [ "$REAL_GPU" = 1 ] && tasklist //FI "IMAGENAME eq obs64.exe" //NH 2>/dev/nul
   fi
 fi
 
+# --help is a question, not a run: answer it from the live script, with no lock and no capture folder.
+for A in "$@"; do
+  case "$A" in
+    -h|--help) bash "$HERE/run-world.sh" "$@"; exit $? ;;
+  esac
+done
+
 if ! mkdir "$LOCK" 2>/dev/null; then
   echo "refused: another run holds $LOCK:" >&2
   cat "$LOCK/owner" >&2 2>/dev/null
@@ -42,4 +55,32 @@ VICTORY_CONFIG=${VICTORY_CONFIG:-$ROOT/victory/victory.toml}
 export VICTORY_CONFIG
 # This wrapper holds the lock from here on: a save restore in the run below is this run's own.
 export WORLD_RUN_HOLDS_LOCK=1
-bash "$HERE/run-world.sh" "$@"
+
+# The run's own copy of the scripts, in its capture folder. The stamp is fixed here so run-world.sh names the same
+# log and capture folder from its copy.
+STAMP=${WORLD_RUN_STAMP:-$(date +%Y%m%d-%H%M%S)}
+TAG=run
+PREV=
+for A in "$@"; do
+  [ "$PREV" = --tag ] && TAG=$A
+  PREV=$A
+done
+CAPTURES=${VICTORY_CAPTURES:-/captures}
+CAPTURE=${CAPTURE:-${CAPTURES%/}/$STAMP-$TAG}
+export WORLD_RUN_STAMP="$STAMP" CAPTURE
+if ! mkdir -p "$CAPTURE"; then
+  echo "refused: could not make the capture folder" >&2
+  exit 2
+fi
+for FILE in run-world.sh local-env.sh public-lines.sh pipeline-library.sh obs.sh; do
+  if ! cp -f "$HERE/$FILE" "$CAPTURE/$FILE"; then
+    echo "refused: could not copy $FILE into the capture folder" >&2
+    exit 2
+  fi
+done
+WORLD_RUN_HARNESS_DIR="$HERE" bash "$CAPTURE/run-world.sh" "$@"
+RC=$?
+exit "$RC"
+}
+main "$@"
+exit

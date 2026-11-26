@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './test-isolation.mjs';
 import { dataDir, measure, oneFolder, restore, saveAs, saveFolder } from './save-snapshot.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -12,7 +13,7 @@ const script = path.join(here, 'save-snapshot.mjs');
 const GUID = '0f0f0f0f-0000-4000-8000-000000000000';
 
 function runSnapshot(args) {
-  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env: isolatedEnv() });
 }
 
 function writeFile(file, text) {

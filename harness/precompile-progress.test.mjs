@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { etaFromRate, overlayJson, stateFrom, write } from './precompile-progress.mjs';
+import { FALLBACK_EXPECTED, etaFromRate, expectedFromLogs, makeTicker, overlayJson, plain, stateFrom, write } from './precompile-progress.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(here, 'precompile-progress.mjs');
@@ -80,18 +80,13 @@ test('before the pipelines total arrives the bar tops out at the translate share
   assert.equal(state.eta_s, null, 'no pipelines count yet, so no rate');
 });
 
-test('a one-phase warm-up shows the whole bar over its translation', () => {
-  const lines = ['progress total programs=100 containers=1', 'progress translated 50 of 100 refused=0 failed_validation=0'];
-  const state = stateFrom(lines, { startedMs: 0, nowMs: 2000, onePhase: true });
-  assert.equal(state.percent, 50);
-  assert.equal(state.phase, 'translating');
-  // A build that does print pipeline lines takes it back to the two-phase bar.
-  const both = stateFrom(
+test('a build that prints pipeline lines takes the bar to the two-phase form', () => {
+  const state = stateFrom(
     ['progress total programs=100 containers=1', 'progress translated 100 of 100 refused=0 failed_validation=0', 'progress pipelines total=1000', 'progress pipelines 500 of 1000 failed=0'],
-    { startedMs: 0, nowMs: 2000, onePhase: true },
+    { startedMs: 0, nowMs: 2000 },
   );
-  assert.equal(both.percent, 65);
-  assert.equal(both.phase, 'pipelines');
+  assert.equal(state.percent, 65);
+  assert.equal(state.phase, 'pipelines');
 });
 
 test('the estimate is the rest of this phase plus the other phase at the measured split', () => {
@@ -243,4 +238,212 @@ test('overlayJson keeps exactly the overlay fields', () => {
   assert.equal(json.phase, 'pipelines');
   assert.equal(json.translate_done, 10);
   assert.equal(json.pipelines_done, 1);
+});
+
+test('the log prefixes each line with its tracing header, and the counters still read', () => {
+  // The shapes the warm-up actually wrote (2026-11-25 09:19:54, the first pre-compile with the bar).
+  const lines = [
+    '2026-11-25T09:19:54.011627Z  INFO victory::translate: progress total programs=25758 containers=26599',
+    '2026-11-25T09:20:40.291874Z  INFO victory::translate: progress translated 12 of 25758 refused=0 failed_validation=0',
+    '2026-11-25T09:20:46.339299Z  INFO victory::translate: progress translated 643 of 25758 refused=0 failed_validation=0',
+  ];
+  const state = stateFrom(lines, { startedMs: Date.parse('2026-11-25T09:18:56.000000Z'), nowMs: Date.parse('2026-11-25T09:22:10.000000Z') });
+  assert.equal(state.translate_total, 25758);
+  assert.equal(state.translate_done, 643);
+  assert.ok(state.percent > 0 && state.percent < 3, `percent was ${state.percent}`);
+});
+
+test('a blocked overlay write is retried on the next tick and never throws; other failures are logged', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'precompile-feed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const log = path.join(dir, 'warm.log');
+  fs.writeFileSync(log, '2026-11-25T09:19:54Z  INFO victory::translate: progress total programs=100 containers=2\n');
+  const out = path.join(dir, 'precompile.json');
+
+  let busy = 2;
+  let failing = 0;
+  const warnings = [];
+  const fsOps = {
+    mkdirSync: fs.mkdirSync,
+    writeFileSync: (...args) => {
+      if (failing > 0) {
+        failing -= 1;
+        const err = new Error('io');
+        err.code = 'EIO';
+        throw err;
+      }
+      return fs.writeFileSync(...args);
+    },
+    renameSync: (...args) => {
+      if (busy > 0) {
+        busy -= 1;
+        const err = new Error('held by a reader');
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return fs.renameSync(...args);
+    },
+  };
+  const { tick } = makeTicker({ log, out, startedMs: 0, intervalMs: 0, fsOps, warn: (m) => warnings.push(m) });
+  tick();
+  tick();
+  assert.equal(fs.existsSync(out), false, 'two blocked writes leave no file, and no exception escaped');
+  assert.equal(warnings.length, 0, 'a reader holding the file is retried without noise');
+  tick();
+  assert.equal(JSON.parse(fs.readFileSync(out, 'utf8')).total, 100, 'the third tick writes');
+
+  failing = 1;
+  fs.rmSync(out);
+  tick();
+  assert.equal(fs.existsSync(out), false, 'a real failure leaves the file as it was');
+  assert.match(warnings[0], /overlay write failed \(EIO\)/);
+  tick();
+  assert.equal(JSON.parse(fs.readFileSync(out, 'utf8')).total, 100, 'the loop carries on after a logged failure');
+});
+
+// What a warm log really holds (2026-11-26): ANSI-coloured tracing lines, one per program and per compute pipeline, no
+// totals and no `progress` lines, and a closing `warm ...` line. The lines below are synthetic, in that shape.
+const ESC = '\x1b';
+const coloured = (level, target, message) =>
+  `${ESC}[2m2026-11-26T04:24:51.988492Z${ESC}[0m ${level} ${ESC}[2m${target}${ESC}[0m${ESC}[2m:${ESC}[0m ${message}`;
+const translatedLine = (stage = 'pixel') =>
+  coloured(`${ESC}[32m INFO${ESC}[0m`, 'victory_gpu::pipeline', `shader translated ${ESC}[3mstage${ESC}[0m${ESC}[2m=${ESC}[0m"${stage}" ${ESC}[3mhash${ESC}[0m${ESC}[2m=${ESC}[0mabc`);
+const refusedLine = () =>
+  coloured(`${ESC}[33m WARN${ESC}[0m`, 'victory_gpu::pipeline', `shader does not translate; its pipelines' draws are dropped ${ESC}[3mstage${ESC}[0m${ESC}[2m=${ESC}[0m"mesh"`);
+const pipelineLine = () =>
+  coloured(`${ESC}[32m INFO${ESC}[0m`, 'victory_gpu::pipeline::host', `host pipeline ${ESC}[3mshaders${ESC}[0m${ESC}[2m=${ESC}[0m[compute abc]`);
+const pipelineRefusedLine = () =>
+  coloured(`${ESC}[33m WARN${ESC}[0m`, 'victory_gpu::pipeline::host', `host pipeline refused ${ESC}[3merror${ESC}[0m${ESC}[2m=${ESC}[0mx`);
+const libraryLine = () =>
+  coloured(`${ESC}[32m INFO${ESC}[0m`, 'victory_gpu::pipeline::library', `host pipeline library saved ${ESC}[3mbytes${ESC}[0m${ESC}[2m=${ESC}[0m5`);
+const EXPECTED = { programs: 10, pipelines: 5 };
+
+test('ANSI colour codes and the tracing header are stripped before a line is matched', () => {
+  assert.equal(plain(translatedLine()), 'shader translated stage="pixel" hash=abc');
+  assert.equal(plain(pipelineLine()), 'host pipeline shaders=[compute abc]');
+  // The colour codes split `programs=100` and `pipelines=0` into pieces; the older progress lines still read.
+  const split = [
+    coloured(' INFO', 'victory::translate', `progress total ${ESC}[3mprograms${ESC}[0m${ESC}[2m=${ESC}[0m100 ${ESC}[3mcontainers${ESC}[0m${ESC}[2m=${ESC}[0m2`),
+    coloured(' INFO', 'victory::translate', `progress translated 40 of 100 refused=0 failed_validation=0`),
+  ];
+  const state = stateFrom(split, { startedMs: 0, nowMs: 1000 });
+  assert.equal(state.translate_total, 100);
+  assert.equal(state.translate_done, 40);
+  assert.equal(state.percent, 12);
+});
+
+test("today's log: every program and compute pipeline line counts, against the expected totals", () => {
+  const lines = [translatedLine(), translatedLine('compute'), translatedLine('mesh'), refusedLine(), libraryLine()];
+  let state = stateFrom(lines, { startedMs: 0, nowMs: 2000, expected: EXPECTED });
+  assert.equal(state.state, 'running');
+  assert.equal(state.translate_done, 4, 'translated and refused programs, not the library line');
+  assert.equal(state.translate_total, 10);
+  assert.equal(state.pipelines_done, null);
+  assert.equal(state.phase, 'translating');
+  assert.equal(state.percent, 12);
+  // Two pipelines, one of them refused, are two of five: 30% of 0.4 and 70% of 0.4.
+  state = stateFrom([...lines, pipelineLine(), pipelineRefusedLine()], { startedMs: 0, nowMs: 2000, expected: EXPECTED });
+  assert.equal(state.phase, 'pipelines');
+  assert.equal(state.pipelines_done, 2);
+  assert.equal(state.pipelines_total, 5);
+  assert.equal(state.percent, 40);
+});
+
+test('the bar rises with every stage of a warm-up and ends at 100 on the closing line', () => {
+  const lines = [];
+  const seen = [];
+  const at = (extra) => {
+    lines.push(...extra);
+    seen.push(stateFrom([...lines], { startedMs: 0, nowMs: 5000, expected: EXPECTED }).percent);
+  };
+  at([translatedLine(), translatedLine()]);
+  at([translatedLine(), refusedLine(), translatedLine()]);
+  at([pipelineLine()]);
+  at([translatedLine('compute'), pipelineLine(), pipelineLine()]);
+  at([translatedLine(), translatedLine(), translatedLine('compute'), pipelineLine(), pipelineLine()]);
+  for (let i = 1; i < seen.length; i += 1) assert.ok(seen[i] > seen[i - 1], `percent did not rise: ${seen.join(', ')}`);
+  assert.ok(seen.every((p) => p !== null && p <= 100), seen.join(', '));
+  const closing = 'warm         10 translated, 0 refused; 4 compute pipelines, 1 refused; 12 s';
+  const done = stateFrom([...lines, libraryLine(), closing], { startedMs: 0, nowMs: 13_000, expected: EXPECTED });
+  assert.equal(done.state, 'done');
+  assert.equal(done.percent, 100);
+  assert.equal(done.translate_done, 10);
+  assert.equal(done.pipelines_done, 5);
+  assert.equal(done.eta_s, null);
+});
+
+test('a warm-up larger than the expected totals grows them instead of passing 100', () => {
+  const lines = [...Array(12).fill(0).map(() => translatedLine()), ...Array(7).fill(0).map(() => pipelineLine())];
+  const state = stateFrom(lines, { startedMs: 0, nowMs: 1000, expected: EXPECTED });
+  assert.equal(state.translate_total, 12);
+  assert.equal(state.pipelines_total, 7);
+  assert.equal(state.percent, 100);
+});
+
+test('the closing line is read through colour codes and gives the totals itself', () => {
+  const closing = `${ESC}[2mwarm${ESC}[0m         25669 translated, 89 refused; 2695 compute pipelines, 1 refused; 261 s`;
+  const state = stateFrom([closing], { startedMs: 0, nowMs: 1000 });
+  assert.equal(state.state, 'done');
+  assert.equal(state.translate_total, 25_758);
+  assert.equal(state.pipelines_total, 2_696);
+  assert.equal(state.percent, 100);
+});
+
+test('expected totals come from the newest earlier warm log with a closing line, else the fallback', (t) => {
+  const dir = tempDir(t);
+  const write = (name, text, ageSeconds) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, text);
+    const when = new Date(Date.now() - ageSeconds * 1000);
+    fs.utimesSync(file, when, when);
+    return file;
+  };
+  assert.deepEqual(expectedFromLogs(dir), FALLBACK_EXPECTED, 'no warm logs');
+  assert.deepEqual(expectedFromLogs(path.join(dir, 'missing')), FALLBACK_EXPECTED, 'no folder');
+  write('a.log.warm', `${translatedLine()}\nwarm  70 translated, 30 refused; 8 compute pipelines, 2 refused; 9 s\n`, 300);
+  write('b.log.warm', `${translatedLine()}\nwarm  1 translated, 0 refused; 0 compute pipelines, 0 refused; 1 s\n`, 200);
+  write('c.log.warm', `${translatedLine()}\n`, 100);
+  const current = write('d.log.warm', 'warm  5 translated, 5 refused; 5 compute pipelines, 5 refused; 1 s\n', 0);
+  write('e.log', 'warm  9 translated, 9 refused; 9 compute pipelines, 9 refused; 1 s\n', 0);
+  // The current log is never its own reference; a failed run (no closing line) and a pipeline-less one are passed over.
+  assert.deepEqual(expectedFromLogs(dir, current), { programs: 100, pipelines: 10 });
+});
+
+test('final reads a failed run with no closing line against the earlier warm-up in its folder', (t) => {
+  const dir = tempDir(t);
+  fs.writeFileSync(path.join(dir, 'earlier.log.warm'), 'warm  15 translated, 5 refused; 8 compute pipelines, 2 refused; 9 s\n');
+  const log = path.join(dir, 'now.log.warm');
+  fs.writeFileSync(log, [translatedLine(), translatedLine(), refusedLine(), pipelineLine()].join('\n'));
+  const out = path.join(dir, 'precompile.json');
+  const result = spawnSync(process.execPath, [script, 'final', '--log', log, '--out', out, '--started-ms', '0', '--exit', '3'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.equal(parsed.state, 'failed');
+  assert.equal(parsed.translate_done, 3);
+  assert.equal(parsed.translate_total, 20);
+  assert.equal(parsed.pipelines_done, 1);
+  assert.equal(parsed.pipelines_total, 10);
+  assert.equal(parsed.percent, 11.5);
+});
+
+test('the one-phase flag is gone from the script and from the run wrapper', () => {
+  const result = spawnSync(process.execPath, [script, 'follow', '--log', 'x', '--one-phase'], { encoding: 'utf8' });
+  assert.equal(result.status, 2, 'an unknown flag is refused, not ignored');
+  assert.match(result.stderr, /unknown argument --one-phase/);
+  const wrapper = fs.readFileSync(path.join(here, 'run-world.sh'), 'utf8');
+  assert.equal(wrapper.includes('--one-phase'), false);
+});
+
+test('a feed that follows today-format lines writes a rising percentage', (t) => {
+  const dir = tempDir(t);
+  const log = path.join(dir, 'warm.log');
+  const out = path.join(dir, 'precompile.json');
+  fs.writeFileSync(log, `${translatedLine()}\n${translatedLine()}\n`);
+  const { tick } = makeTicker({ log, out, startedMs: 0, expected: EXPECTED, intervalMs: 0 });
+  tick();
+  const first = JSON.parse(fs.readFileSync(out, 'utf8')).percent;
+  fs.appendFileSync(log, `${translatedLine()}\n${pipelineLine()}\n`);
+  tick();
+  const second = JSON.parse(fs.readFileSync(out, 'utf8')).percent;
+  assert.ok(first > 0 && second > first, `${first} then ${second}`);
 });

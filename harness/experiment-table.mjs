@@ -33,6 +33,7 @@ function build(file) {
   );
   const last = summary.lastFrameLine;
   const hung = extras.hung;
+  const copies = summary.copyStats;
   const run = {
     file,
     stamp,
@@ -56,6 +57,14 @@ function build(file) {
     dred: extras.dred,
     slowestSubmission: slowest ? { ms: slowest.ms, lists: slowest.lists } : null,
     droppedDraws: last ? last.dropped : null,
+    distinctPages: copies ? copies.distinctPages : null,
+    guardCount: copies ? copies.guardCount : null,
+    guardsMs: copies ? copies.guardsMs : null,
+    descriptorCopySyncMs: copies ? copies.descriptorCopySyncMs : null,
+    descriptorCopyRecords: copies ? copies.descriptorCopyRecords : null,
+    askedAboutMb: copies ? copies.askedAboutMb : null,
+    observers: summary.observers,
+    switches: summary.switches,
     settings: extras.settings,
   };
   if (presentmon) run.presentmon = presentmon;
@@ -118,6 +127,11 @@ const headers = [
   'GPU timing',
   'debug layer',
   'GBV',
+  'distinct pages',
+  'guards',
+  'descriptor-copy',
+  'observers',
+  'switches',
 ];
 
 const mdCell = (value) => {
@@ -167,6 +181,17 @@ function rowFor(run) {
     run.settings.gpuTiming === null ? '?' : run.settings.gpuTiming ? 'on' : 'off',
     run.settings.d3d12Debug === null ? '?' : run.settings.d3d12Debug ? 'on' : 'off',
     run.settings.d3d12Gbv === null ? '?' : run.settings.d3d12Gbv ? 'on' : 'off',
+    run.distinctPages ?? DASH,
+    run.guardCount ?? DASH,
+    run.descriptorCopySyncMs === null
+      ? DASH
+      : `${run.descriptorCopySyncMs.toFixed(2)} ms / ${run.descriptorCopyRecords ?? DASH} records`,
+    run.observers ? run.observers.join(', ') : DASH,
+    run.switches.length
+      ? run.switches
+          .map((entry) => `${entry.name}=${entry.value} (${entry.on ? 'on' : 'off'})`)
+          .join(', ')
+      : DASH,
   ];
 }
 

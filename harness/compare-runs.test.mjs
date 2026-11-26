@@ -5,13 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './test-isolation.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(here, 'compare-runs.mjs');
 const TS = '2026-11-25T00:00:00.000000Z  INFO victory_gpu::host: ';
 
 function run(args) {
-  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env: isolatedEnv() });
 }
 
 function fixture(t, name, lines) {
@@ -39,10 +40,14 @@ function frame({
   making = 0,
   indirect = 0,
   waiting = 0,
+  frameNumber = null,
+  hashed = false,
 } = {}) {
+  const prefix = frameNumber === null ? '' : `frame ${frameNumber}, `;
+  const textureLabel = hashed ? 'textures hashed' : 'textures';
   return (
-    `${TS}${fps} fps, ${ms} ms/frame (${preparing} preparing: copies ${copiesMs} ms ${copiesMb} MB, ` +
-    `textures ${texturesMs} ms ${texturesMb} MB; ${gpu} on the GPU; ${backMs} copying back ${backMb} MB), ` +
+    `${TS}${prefix}${fps} fps, ${ms} ms/frame (${preparing} preparing: copies ${copiesMs} ms ${copiesMb} MB, ` +
+    `${textureLabel} ${texturesMs} ms ${texturesMb} MB; ${gpu} on the GPU; ${backMs} copying back ${backMb} MB), ` +
     `${draws} draws/frame, dropped ${dropped} without a host pipeline (${making} being made) and ${indirect} indirect; ` +
     `heap buffers 0.0 passes 0.0 ms; texture slots written so far: 1 placed, 1 of objects; ` +
     `textures picked by index: 1 uploaded so far (1 MB), ${waiting} waiting, 0 passed over unmapped`
@@ -259,6 +264,19 @@ test("tonight's new lines become rows and sections", (t) => {
   assert.equal(parsed.runs[0].threads.named['victory-copy'].user, 110);
 });
 
+test('the new frame-line form parses: frame number first, "textures hashed"', (t) => {
+  const log = fixture(t, 'new-frame', [
+    frame({ ms: 300, frameNumber: 18432, hashed: true, texturesMs: 1.5 }),
+    frame({ ms: 330, frameNumber: 18433, hashed: true, texturesMs: 2.5 }),
+  ]);
+  const result = run([`a=${log}`, `b=${log}`, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.runs[0].frameLines, 2);
+  assert.equal(parsed.runs[0].fields.ms, 315);
+  assert.equal(parsed.runs[0].fields.texturesMs, 2);
+});
+
 test('--json prints the same numbers as objects', (t) => {
   const a = fixture(t, 'a', [frame({ ms: 300 }), ahead()]);
   const b = fixture(t, 'b', [frame({ ms: 330 }), ahead()]);
@@ -281,4 +299,28 @@ test('the command line refuses one log, and reports a file it cannot read', (t) 
   result = run(['a=x.log', 'b=y.log', '--nope']);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /unknown argument --nope/);
+});
+
+test('the run-health rows show null-magenta counters and say NOT CLEAN outright', (t) => {
+  const health = (silent) =>
+    `health: 2520 guards put on, 77 faults taken, ${silent} guards gone with no fault, 2 pages passed over as a kernel write or the platform layer held them, 0 not armed for their protection, 3 openings around our own kernel copies; the instrument's cost 0.038 ms a frame`;
+  const magenta =
+    'null magenta: frame=120 substituted=3 never_made=2 waiting=1 let_go=0 cannot_make=1 unmapped=1 stale=0 left_depth=1 left_integer=0 left_other=0 left_no_view=2 examples=0x10:waiting';
+  const clean = fixture(t, 'clean', [SETTLED, frame({ ms: 300 }), `${TS}${magenta}`, `${TS}${health(0)}`]);
+  const dirty = fixture(t, 'dirty', [SETTLED, frame({ ms: 300 }), `${TS}${magenta}`, `${TS}NOT CLEAN: 4 guards went with no fault (2 unmapped, 2 lost); ${health(4)}`]);
+  const result = run([`clean=${clean}`, `dirty=${dirty}`]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /## Run health/);
+  assert.match(result.stdout, /\| first touch \| clean \| \*\*NOT CLEAN\*\* \(4\.0 silent\) \|/);
+  assert.match(result.stdout, /\| null magenta: substituted a frame \| 3\.0 \(worst 3\.0\) \| 3\.0 \(worst 3\.0\) \|/);
+});
+
+test('the pipeline wait row marks a window spent compiling and never reads as a benchmark', (t) => {
+  const wait = (ms) =>
+    `${TS}recording per frame (105 frames): 29 list calls 4.6 ms (all recording threads); ${ms} ms waiting for pipelines; dynamic slots: 3 tables asked, 0 refused, 0.0 ms searching`;
+  const compiling = fixture(t, 'compiling', [SETTLED, `${TS}${wait(630)}`, frame({ ms: 500 }), `${TS}${wait(600)}`, frame({ ms: 520 })]);
+  const quiet = fixture(t, 'quiet', [SETTLED, `${TS}${wait(0.2)}`, frame({ ms: 300 }), `${TS}${wait(0.4)}`, frame({ ms: 310 })]);
+  const result = run([`compiling=${compiling}`, `quiet=${quiet}`]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /\| waiting for pipelines ms a frame \(settled window\) \| 615\.0 ms — \*\*compiling during the window\*\* \| 0\.3 ms \|/);
 });

@@ -16,14 +16,12 @@ body:
       label: Lane
       description: One lane only; two lanes never own the same file.
       options:
-        - Room and portal decision (the missing walls)
-        - Mesh geometry (stray triangles)
-        - Texture layout (scrambled patches)
-        - 64-lane shaders on 32-lane hosts
-        - Host-refused pipelines
-        - Cutscene white-out and screen-filling triangles
-        - Speed
-        - Harness and tools
+        - CPU threading (draw preparation across cores)
+        - Native memory (moving off the console's shared memory model)
+        - Shaders to 100% (61 of 25,758 programs still refused; picture faults)
+        - Upscaling (DLSS in place of the title's own temporal upscaler)
+        - Ray tracing
+        - Tools and harness
     validations:
       required: true
   - type: input

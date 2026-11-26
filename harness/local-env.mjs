@@ -23,6 +23,7 @@ export const LOCAL_ENV_NAMES = Object.freeze([
   'VICTORY_WORKTREES', // the lane worktrees run-queue.sh looks a bare lane name up in
   'PRESENTMON_EXE', // PresentMon's executable (presentmon.mjs)
   'VICTORY_SAVE_BACKUPS', // the save snapshots and before-run backups (save-snapshot.mjs)
+  'VICTORY_PRECOMPILE_JSON', // the pre-compile overlay's state file (run-world.sh, precompile-progress.mjs)
 ]);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

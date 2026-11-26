@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './test-isolation.mjs';
 import { readRoute, routeNames } from './route-keys.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,15 @@ function tempDir(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+
+test('a route can hold the settle by time as well as give its window', (t) => {
+  const dir = tempDir(t);
+  fs.writeFileSync(path.join(dir, 'held.keys'), ['# settled-seconds: 75', '# settled-after: 150', '55:Enter', ''].join('\n'));
+  const route = readRoute(dir, 'held');
+  assert.equal(route.settledSeconds, '75');
+  assert.equal(route.settledAfter, '150');
+  assert.deepEqual(route.keys, ['55:Enter']);
+});
 
 test('a route reads its comments, its header and its entries, joined with commas', (t) => {
   const dir = tempDir(t);
@@ -42,6 +52,7 @@ test('a route reads its comments, its header and its entries, joined with commas
     keys: ['55:Enter', '65:Enter', '70:J:8', '80:Backspace:4'],
     heavySeconds: '42',
     settledSeconds: '75',
+    settledAfter: null,
   });
   assert.deepEqual(routeNames(dir), ['sample']);
 });
@@ -80,10 +91,10 @@ test('a route with no keys fails rather than running an empty key list', (t) => 
 test('the harness refuses --keys and --route together, and lists routes for a missing one', () => {
   // The script exits at argument parsing for both, before any binary or game check, so nothing runs.
   const harness = path.join(here, 'run-world.sh');
-  let result = spawnSync('bash', [harness, '--keys', '55:Enter', '--route', 'demo-turn'], { encoding: 'utf8' });
+  let result = spawnSync('bash', [harness, '--keys', '55:Enter', '--route', 'demo-turn'], { encoding: 'utf8', env: isolatedEnv() });
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /--keys and --route together/);
-  result = spawnSync('bash', [harness, '--route', 'nowhere'], { encoding: 'utf8' });
+  result = spawnSync('bash', [harness, '--route', 'nowhere'], { encoding: 'utf8', env: isolatedEnv() });
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /no route 'nowhere'; routes: \S/);
 });

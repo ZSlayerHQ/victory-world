@@ -32,7 +32,7 @@ const WAITING_RE = /textures picked by index: \d+ uploaded so far \(\d+ MB\), (\
 // The late-submission line: "submissions sent ahead per frame: X in Y settles (...), W ms waiting ...; settled for:
 // reason N, reason N, ...". The settles and the reasons are what this tool reports per frame.
 const AHEAD_RE =
-  /submissions sent ahead per frame: ([\d.]+) in ([\d.]+) settles \(([\d.]+) flights each time\), ([\d.]+) ms waiting for the card in them; settled for: (.*?)(?:;|$)/;
+  /submissions sent ahead per frame: ([\d.]+) in ([\d.]+) settles \((?:([\d.]+) flights each time|flights landed by the relay)\), ([\d.]+) ms (?:waiting for the card in them|host time waiting for settles); settled for: (.*?)(?:;|$)/;
 const REFUSED_RE = /host (?:mesh )?pipeline refused .*shaders=\[(.*?)\]/;
 const CARD_CLOCK_RE = /card clock:\s*(.*)$/;
 const CARD_CLOCK_FIELDS = [
@@ -62,12 +62,13 @@ function analyze(label, logPath) {
       const costs = line.match(COST_RE);
       const waitingOnFrame = line.match(WAITING_RE);
       block = {
-        fps: Number(frame[2]),
-        ms: Number(frame[3]),
-        draws: Number(frame[5]),
-        dropped: Number(frame[6]),
-        making: Number(frame[7]),
-        indirect: Number(frame[8]),
+        frame: frame.groups.frame === undefined ? null : Number(frame.groups.frame),
+        fps: Number(frame.groups.fps),
+        ms: Number(frame.groups.ms),
+        draws: Number(frame.groups.draws),
+        dropped: Number(frame.groups.dropped),
+        making: Number(frame.groups.making),
+        indirect: Number(frame.groups.indirect),
         preparing: costs ? Number(costs[1]) : null,
         copiesMs: costs ? Number(costs[2]) : null,
         copiesMb: costs ? Number(costs[3]) : null,
@@ -148,6 +149,9 @@ function analyze(label, logPath) {
     capabilities: aggregated.capabilities,
     settleReasons: aggregated.settleReasons,
     leftOut: aggregated.leftOut,
+    nullMagenta: aggregated.nullMagenta,
+    firstTouch: aggregated.firstTouch,
+    pipelineWaitMs: aggregated.pipelineWaitMs,
     threads: aggregated.threads,
     stats: {
       fps: median(frames.map((f) => f.fps)),
@@ -229,6 +233,7 @@ const ROWS = [
   ['Buffer copies on the CPU MB', (r) => r.stats.bufferOnCpuMb, 'number'],
   ['Buffer copies that settled flights a frame', (r) => r.stats.bufferSettled, 'number'],
   ['Buffer copies that settled flights MB', (r) => r.stats.bufferSettledMb, 'number'],
+  ['waiting for pipelines ms a frame (settled window)', (r) => pipelineWaitText(r), 'text'],
   ...CARD_CLOCK_FIELDS.map((field) => [`${field} median`, (r) => clockMedian(r, field), 'number']),
 ];
 
@@ -245,6 +250,17 @@ function refusedText(run) {
   const shown = run.refused.slice(0, 6).join(', ');
   const more = run.refused.length > 6 ? `, +${run.refused.length - 6}` : '';
   return `${run.refused.length}: ${shown}${more}`;
+}
+
+// The recording threads' wait for pipelines across the settled window. Above the quiet threshold the window was
+// compile time (a scene's first visit), so the row says so outright: such a run is never a benchmark.
+const PIPELINE_COMPILING_MS = 5;
+
+function pipelineWaitText(run) {
+  if (!finite(run.pipelineWaitMs)) return 'not printed';
+  return run.pipelineWaitMs > PIPELINE_COMPILING_MS
+    ? `${fmt(run.pipelineWaitMs)} ms — **compiling during the window**`
+    : `${fmt(run.pipelineWaitMs)} ms`;
 }
 
 function difference(base, value) {
@@ -278,9 +294,62 @@ function summary(runs) {
       out.push(mdRow([label, ...runs.slice(1).map((run) => difference(base, value(run)))]));
     }
   }
-  for (const section of [settleReasonsSection(runs), leftOutSection(runs), threadsSection(runs)]) {
+  for (const section of [settleReasonsSection(runs), leftOutSection(runs), runHealthSection(runs), threadsSection(runs)]) {
     if (section) out.push('', section);
   }
+  return out.join('\n');
+}
+
+/// The two instrument lines: null-magenta writes (its counters are per frame; the worst frame is shown beside the
+/// last line's) and the first-touch scoreboard, which says NOT CLEAN outright when any of its lines did.
+function runHealthSection(runs) {
+  if (!runs.some((run) => run.nullMagenta || run.firstTouch)) return '';
+  const out = ['## Run health', `| Line | ${runs.map((run) => mdCell(run.label)).join(' | ')} |`, `|${'---|'.repeat(runs.length + 1)}`];
+  out.push(
+    mdRow([
+      'null magenta: substituted a frame',
+      ...runs.map((run) => {
+        const nm = run.nullMagenta;
+        if (!nm) return DASH;
+        return `${fmt(nm.substituted)} (worst ${fmt(nm.worstSubstituted)})`;
+      }),
+    ]),
+  );
+  out.push(
+    mdRow([
+      'null magenta: never made, waiting',
+      ...runs.map((run) => {
+        const nm = run.nullMagenta;
+        return nm ? `${fmt(nm.neverMade)}, ${fmt(nm.waiting)}` : DASH;
+      }),
+    ]),
+  );
+  out.push(
+    mdRow([
+      'null magenta: examples',
+      ...runs.map((run) => {
+        const nm = run.nullMagenta;
+        if (!nm) return DASH;
+        return nm.examples.length ? nm.examples.slice(0, 3).join(', ') : 'none';
+      }),
+    ]),
+  );
+  out.push(
+    mdRow([
+      'first touch',
+      ...runs.map((run) => {
+        const ft = run.firstTouch;
+        if (!ft) return DASH;
+        return ft.clean ? 'clean' : `**NOT CLEAN** (${fmt(ft.worstSilent)} silent)`;
+      }),
+    ]),
+  );
+  out.push(
+    mdRow([
+      'first touch: cost ms a frame',
+      ...runs.map((run) => (run.firstTouch ? run.firstTouch.costMs.toFixed(3) : DASH)),
+    ]),
+  );
   return out.join('\n');
 }
 

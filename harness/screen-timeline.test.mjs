@@ -65,6 +65,22 @@ function frameLine(at, fps, draws, dropped) {
   return `${at}  INFO victory_gpu::frame: ${fps} fps, 300.0 ms/frame (preparing: copies 1.0 ms 2.0 MB, textures 3.0 ms 4.0 MB; 5.0 on the GPU; 6.0 copying back 7.0 MB), ${draws} draws/frame, dropped ${dropped} without a host pipeline (0 being made) and 0 indirect`;
 }
 
+test('frame samples parse both frame-line forms, with and without the frame number', () => {
+  const old = frameLine('2026-11-24T12:00:00.000000Z', 30, 12, 0);
+  const fresh =
+    '2026-11-26T05:02:11.250000Z  INFO victory_gpu::host: frame 18432, 27.4 fps, 36.5 ms/frame ' +
+    '(0.4 preparing: copies 0.3 ms 1.2 MB, textures hashed 0.2 ms 0.1 MB; 1.7 on the GPU; ' +
+    '0.1 copying back 0.9 MB), 5000 draws/frame, dropped 3 without a host pipeline (1 being made) and 7 indirect';
+  const samples = frameSamples([old, fresh]);
+  assert.deepEqual(
+    samples.map((sample) => [sample.fps, sample.draws, sample.dropped]),
+    [
+      [30, 12, 0],
+      [27.4, 5000, 3],
+    ],
+  );
+});
+
 test('a black, picture, black recording gives three stretches with the right kinds and times', (t) => {
   const dir = tempDir(t);
   const video = syntheticVideo(dir);

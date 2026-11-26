@@ -5,12 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './test-isolation.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(here, 'experiment-table.mjs');
 
 function runTable(args) {
-  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env: isolatedEnv() });
 }
 
 function tables(stdout) {
@@ -40,6 +41,11 @@ function objects(table) {
 
 function frameLine(ts, fps, dropped = 0) {
   return `${ts}  INFO victory_gpu::host: ${fps.toFixed(1)} fps, 33.3 ms/frame (0.2 preparing: copies 0.1 ms 0.2 MB, textures 0.0 ms 0.0 MB; 0.9 on the GPU; 0.0 copying back 0.0 MB), 12 draws/frame, dropped ${dropped} without a host pipeline (0 being made) and 1 indirect`;
+}
+
+// The frame line from job/honest-counters on: the frame number first and "textures hashed".
+function newFrameLine(ts, frame, fps, dropped = 0) {
+  return `${ts}  INFO victory_gpu::host: frame ${frame}, ${fps.toFixed(1)} fps, 33.3 ms/frame (0.2 preparing: copies 0.1 ms 0.2 MB, textures hashed 0.0 ms 0.0 MB; 0.9 on the GPU; 0.0 copying back 0.0 MB), 12 draws/frame, dropped ${dropped} without a host pipeline (0 being made) and 1 indirect`;
 }
 
 function presentLine(ts, frame) {
@@ -129,7 +135,7 @@ test('experiment table: one row per run, ending, hang, DRED, settings and cross-
     'hung list', 'hung command', 'hung op', 'pipeline', 'stage',
     'DRED last op', 'DRED hung op', 'null slots', 'slowest submission',
     'dropped draws', 'skip pipelines', 'loop limit', 'wave64', 'GPU timing',
-    'debug layer', 'GBV',
+    'debug layer', 'GBV', 'distinct pages', 'guards', 'descriptor-copy', 'observers', 'switches',
   ];
   assert.deepEqual(markdown[0].header, headers);
   assert.equal(markdown[0].rows.length, 3);
@@ -159,6 +165,11 @@ test('experiment table: one row per run, ending, hang, DRED, settings and cross-
     'GPU timing': 'on',
     'debug layer': 'off',
     GBV: 'off',
+    'distinct pages': '—',
+    guards: '—',
+    'descriptor-copy': '—',
+    observers: '—',
+    switches: '—',
   });
 
   assert.deepEqual(rows[1], {
@@ -183,13 +194,18 @@ test('experiment table: one row per run, ending, hang, DRED, settings and cross-
     'GPU timing': 'off',
     'debug layer': 'on',
     GBV: 'on',
+    'distinct pages': '—',
+    guards: '—',
+    'descriptor-copy': '—',
+    observers: '—',
+    switches: '—',
   });
 
   assert.equal(rows[2].tag, 'fails');
   assert.equal(rows[2].seconds, '3');
   assert.equal(rows[2]['last frame'], '42');
   assert.equal(rows[2]['median fps'], '10.0');
-  assert.equal(rows[2].ended, 'log ends');
+  assert.equal(rows[2].ended, 'log cut short: no closing harness line');
   assert.equal(rows[2]['hung list'], '—');
   assert.equal(rows[2]['hung command'], '—');
   assert.equal(rows[2]['null slots'], '—');
@@ -261,7 +277,7 @@ test('experiment table: one row per run, ending, hang, DRED, settings and cross-
     record: false,
   });
 
-  assert.equal(data.runs[2].ended.kind, 'log_ends');
+  assert.equal(data.runs[2].ended.kind, 'log_cut_short');
   assert.equal(data.runs[2].seconds, 3);
   assert.equal(data.runs[2].lastFrame, 42);
   assert.deepEqual(data.runs[2].dred, null);
@@ -400,4 +416,57 @@ test('experiment table: a harness-ended run says how it ended', (t) => {
   const json = JSON.parse(runTable(['--json', log]).stdout);
   assert.equal(json.runs[0].ended.kind, 'harness_ended');
   assert.equal(json.runs[0].ended.seconds, 20);
+});
+
+test('experiment table: the new frame and copystat fields reach the row and --json', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'experiment-table-new-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const log = path.join(dir, '20261126-050211-new.log');
+  fs.writeFileSync(
+    log,
+    [
+      'harness build: abc profile=diag console=series-x',
+      '2026-11-26T05:02:10.000000Z  INFO victory_gpu::host: observers on: the debug layer, GPU-based validation, the memory map walk, the counting allocator',
+      '2026-11-26T05:02:10.100000Z  INFO victory_gpu::switches: diagnostic switch set switch=VICTORY_D3D12_DEBUG value=1 on=true',
+      newFrameLine('2026-11-26T05:02:11.250000Z', 18432, 27.4, 3),
+      '2026-11-26T05:02:11.800000Z  INFO victory_gpu::copystat: copies per frame: 1.0 submissions; ' +
+        '2 title copies 3.0 MB; table fills 4.0 MB asked, 5.0 MB filled in 0.10 ms; ' +
+        'descriptor-copy sync 0.25 ms (12 records); 6 refreshes 7.0 MB, 8 skipped 9.0 MB; ' +
+        '10 runs 0.20 ms; 11 queries 0.30 ms, moves 0.40 ms, 12.0 MB unmapped; 13 page faults; ' +
+        '14 watches 0.50 ms (1 failed 0.01 ms), 15.0 MB asked about (repeats counted), ' +
+        '16.0 MB unchanged, 17 distinct pages since the last present; 18 fallbacks; 19 guard faults; ' +
+        '20 idle copies kept, 21 let go by pressure; textures 22.0 MB watched and changed, ' +
+        '23.0 MB hashed, 24.0 MB of them changed',
+      "2026-11-26T05:02:11.800000Z  INFO victory_gpu::copystat: recording per frame (105 frames): 42 guards in 0.7 ms (the fault handler's included)",
+      'harness: victory exit=0',
+      '',
+    ].join('\n'),
+  );
+
+  const result = runTable([log]);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const row = objects(tables(result.stdout)[0])[0];
+  assert.equal(row['last frame'], '18432');
+  assert.equal(row['distinct pages'], '17');
+  assert.equal(row.guards, '42');
+  assert.equal(row['descriptor-copy'], '0.25 ms / 12 records');
+  assert.equal(row.observers, 'the debug layer, GPU-based validation, the memory map walk, the counting allocator');
+  assert.equal(row.switches, 'VICTORY_D3D12_DEBUG=1 (on)');
+
+  const json = JSON.parse(runTable(['--json', log]).stdout);
+  const run = json.runs[0];
+  assert.equal(run.lastFrame, 18432);
+  assert.equal(run.distinctPages, 17);
+  assert.equal(run.guardCount, 42);
+  assert.equal(run.guardsMs, 0.7);
+  assert.equal(run.descriptorCopySyncMs, 0.25);
+  assert.equal(run.descriptorCopyRecords, 12);
+  assert.equal(run.askedAboutMb, 15);
+  assert.deepEqual(run.observers, [
+    'the debug layer',
+    'GPU-based validation',
+    'the memory map walk',
+    'the counting allocator',
+  ]);
+  assert.deepEqual(run.switches, [{ name: 'VICTORY_D3D12_DEBUG', value: '1', on: true }]);
 });

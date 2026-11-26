@@ -36,6 +36,15 @@ test('dot-sourcing run-process.ps1 resets a caller switch of the same name', () 
   assert.match(result.stdout, /after=off/);
 });
 
+// -Translate never falls back to another victory.exe, and without a warm-up start time it selects nothing, so the
+// gentle switch can be run here without touching any process.
+test('raise-priority.ps1 -Translate -Gentle with no warm-up started lowers nothing', () => {
+  const file = path.join(here, 'raise-priority.ps1').replace(/'/g, "''");
+  const result = powershell(`Remove-Item Env:RUN_WORLD_WARM_STARTED_EPOCH -ErrorAction SilentlyContinue; & '${file}' -Translate -Gentle`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^priority: no victory\.exe raised \(\d+ found\)/);
+});
+
 test('the child-scope wrapper keeps the caller switch', () => {
   const runProcess = path.join(here, 'run-process.ps1').replace(/'/g, "''");
   const result = powershell(

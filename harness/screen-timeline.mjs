@@ -137,7 +137,12 @@ export function frameSamples(lines) {
     if (!m) continue;
     const at = Date.parse(m[1]);
     if (Number.isNaN(at)) continue;
-    frames.push({ at, fps: Number(m[2]), draws: Number(m[5]), dropped: Number(m[6]) });
+    frames.push({
+      at,
+      fps: Number(m.groups.fps),
+      draws: Number(m.groups.draws),
+      dropped: Number(m.groups.dropped),
+    });
   }
   return frames;
 }

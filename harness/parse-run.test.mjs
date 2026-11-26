@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseExtras, parseLogLines, parseTranslationFailures } from './parse-run.mjs';
+import { isolatedEnv } from './test-isolation.mjs';
+import { parseExtras, parseLogLines, parseTranslationFailures, stripControl } from './parse-run.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -94,6 +95,21 @@ test('ANSI-coloured text input is still parsed', () => {
   assert.deepEqual(parseTranslationFailures(line), [
     { stage: 'compute', hash: '0123456789abcdef', reason },
   ]);
+});
+
+test('the shared stripper removes any control sequence, not only colour codes', () => {
+  const codes = [
+    '\x1b[0m', // colour reset
+    '\x1b[38;5;196m', // 256-colour
+    '\x1b[?25l', // cursor hide (private parameter)
+    '\x1b]0;a window title\x07', // OSC, BEL-terminated
+    '\x1b]2;a window title\x1b\\', // OSC, ST-terminated
+    '\x1b(B', // ESC ( B, the default character set
+    '\x1b[1;2H', // cursor position
+    '\x9b31m', // 8-bit CSI
+  ];
+  assert.equal(stripControl(`hello${codes.join('')} world`), 'hello world');
+  assert.equal(stripControl('no codes here'), 'no codes here');
 });
 
 test('non-failure lines are ignored and failure order is kept', () => {
@@ -222,6 +238,7 @@ test('summarize-run: the Driver events section reports the counts and the ESR va
 
   const result = spawnSync(process.execPath, [path.join(here, 'summarize-run.mjs'), log], {
     encoding: 'utf8',
+    env: isolatedEnv(),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /## Driver events/);
@@ -234,6 +251,7 @@ test('summarize-run: the Driver events section reports the counts and the ESR va
   const json = JSON.parse(
     spawnSync(process.execPath, [path.join(here, 'summarize-run.mjs'), log, '--json'], {
       encoding: 'utf8',
+      env: isolatedEnv(),
     }).stdout,
   );
   assert.equal(json.driverEvents.total, 4);
@@ -294,6 +312,7 @@ test('summarize-run: a markerless stopped command names no pipeline', (t) => {
 
   const result = spawnSync(process.execPath, [path.join(here, 'summarize-run.mjs'), log], {
     encoding: 'utf8',
+    env: isolatedEnv(),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /stopped at command 250\/552 \(op 5\): pipeline unknown \(no marker\)/);
@@ -405,6 +424,33 @@ test('a non-zero harness exit with no failure line is flagged, not "log ends"', 
   });
 });
 
+test('a log with no closing harness line is cut short, not "no failure line"', () => {
+  assert.deepEqual(parseExtras(['2026-11-24T12:00:00.000000Z  INFO game: a frame'], null, null).ending, {
+    kind: 'log_cut_short',
+    seconds: null,
+    frame: null,
+    text: 'log cut short: no closing harness line',
+  });
+  // The harness's own end markers count as a closing line.
+  for (const line of [
+    'harness: victory exit=1',
+    'harness: ended by --heavy-seconds after 30 s of heavy scene',
+    'harness: ended by --settled-timeout after 600 s: the scene never settled',
+    'harness: ended: disk below 5 GB',
+  ]) {
+    assert.notEqual(parseExtras([line], null, null).ending.kind, 'log_cut_short', line);
+  }
+});
+
+test('the free-space guard end line is its own ending', () => {
+  assert.deepEqual(parseExtras(['harness: ended: disk below 5 GB'], null, null).ending, {
+    kind: 'disk_low',
+    seconds: null,
+    frame: null,
+    text: 'ended: disk below 5 GB',
+  });
+});
+
 test('the harness exit does not overrule a failure line or a clean exit', () => {  // A crash with the same code keeps the crash's ending.
   assert.equal(
     parseExtras(
@@ -455,6 +501,7 @@ test('summarize-run: the screen record line names the video, its frames and its 
   );
   const result = spawnSync(process.execPath, [path.join(here, 'summarize-run.mjs'), log], {
     encoding: 'utf8',
+    env: isolatedEnv(),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Screen record: .*screen\.mp4 \(6 frames, 1 sheets\)/);
@@ -476,4 +523,214 @@ test('summarize-run: the screen record line names the video, its frames and its 
   });
   assert.equal(none.status, 0, none.stderr);
   assert.match(none.stdout, /Screen record: none/);
+});
+
+const quietStart = 'harness: load at start: cpu 4% over 5 s, free memory 42.1 GB of 63.8, commit 38.2 of 64.0 GB, builders 0';
+const quietEnd = 'harness: load at end: cpu 7% over 5 s, free memory 40.0 GB of 63.8, commit 39.0 of 64.0 GB, builders 0';
+
+test('the load lines give the summary a comparable verdict', () => {
+  assert.equal(parseLogLines([quietStart, quietEnd], 'run.log').summary.comparable, 'yes');
+  assert.equal(
+    parseLogLines(['harness: load at start: cpu 41% over 5 s, free memory 42.1 GB of 63.8, commit 38.2 of 64.0 GB, builders 0', quietEnd], 'run.log')
+      .summary.comparable,
+    'no (cpu 41% is over 25% at start)',
+  );
+  assert.equal(
+    parseLogLines([quietStart, 'harness: load at end: cpu 7% over 5 s, free memory 9.2 GB of 63.8, commit 39.0 of 64.0 GB, builders 2'], 'run.log')
+      .summary.comparable,
+    'no (free memory 9.2 GB is under 12 GB at end; 2 builders is over 0 at end)',
+  );
+  assert.equal(parseLogLines([], 'run.log').summary.comparable, 'unknown (no load lines)');
+});
+
+test('the comparable thresholds are variables with the documented defaults', () => {
+  const hot = 'harness: load at start: cpu 41% over 5 s, free memory 42.1 GB of 63.8, commit 38.2 of 64.0 GB, builders 0';
+  const parsed = parseLogLines([hot, quietEnd], 'run.log', {
+    env: { HARNESS_MAX_CPU: '50', HARNESS_MIN_FREE_MEM_GB: '12', HARNESS_MAX_BUILDERS: '0' },
+  });
+  assert.equal(parsed.summary.comparable, 'yes');
+  assert.deepEqual(parsed.summary.load.limits, { maxCpu: 50, minFreeMemGb: 12, maxBuilders: 0 });
+  assert.equal(parsed.summary.load.start.cpu, 41);
+});
+
+const OLD_FRAME =
+  '2026-11-24T12:00:00.000000Z  INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame ' +
+  '(0.2 preparing: copies 0.1 ms 0.2 MB, textures 0.0 ms 0.0 MB; 0.9 on the GPU; ' +
+  '0.0 copying back 0.0 MB), 12 draws/frame, dropped 0 without a host pipeline (0 being made) and 1 indirect';
+// The text the runtime's frame-line format writes from job/honest-counters on, colour codes included.
+const NEW_FRAME_COLOURED =
+  '\x1b[2m2026-11-26T05:02:11.250000Z\x1b[0m \x1b[32m INFO\x1b[0m ' +
+  '\x1b[2mvictory_gpu::host\x1b[0m\x1b[2m:\x1b[0m ' +
+  'frame 18432, 27.4 fps, 36.5 ms/frame (0.4 preparing: copies 0.3 ms 1.2 MB, ' +
+  'textures hashed 0.2 ms 0.1 MB; 1.7 on the GPU; 0.1 copying back 0.9 MB merged into ' +
+  "title memory (host time, fetches included), 0.0 MB fetched from copies in the card's memory), " +
+  '5000 draws/frame, dropped 3 without a host pipeline (1 being made) and 7 indirect';
+const presentLine = (frame) =>
+  `2026-11-24T12:00:00.500000Z  INFO victory_gpu::queue: frame presented (since the last line: draws and ` +
+  `dispatches, and those run on the host) frame=${frame} draws=12 drawn=12 dispatches=0 dispatched=0`;
+
+test('frame line: the old form parses, and its last presented frame is the present line fallback', () => {
+  const { summary } = parseLogLines([OLD_FRAME, presentLine(8192)], 'old.log');
+  const line = summary.lastFrameLine;
+  assert.equal(line.frame, null);
+  assert.equal(line.fps, 30);
+  assert.equal(line.ms, 33.3);
+  assert.equal(line.draws, 12);
+  assert.equal(line.dropped, 0);
+  assert.equal(line.making, 0);
+  assert.equal(line.indirect, 1);
+  assert.equal(line.texturesMs, 0);
+  assert.equal(line.texturesMb, 0);
+  assert.equal(summary.lastFrame.frame, 8192);
+  assert.equal(summary.lastFrame.draws, 12);
+});
+
+test('frame line: the new form parses its frame number and "textures hashed" figures', () => {
+  const { summary } = parseLogLines([stripControl(NEW_FRAME_COLOURED)], 'new.log');
+  const line = summary.lastFrameLine;
+  assert.equal(line.frame, 18432);
+  assert.equal(line.fps, 27.4);
+  assert.equal(line.ms, 36.5);
+  assert.equal(line.draws, 5000);
+  assert.equal(line.dropped, 3);
+  assert.equal(line.making, 1);
+  assert.equal(line.indirect, 7);
+  assert.equal(line.preparing, 0.4);
+  assert.equal(line.copiesMs, 0.3);
+  assert.equal(line.copiesMb, 1.2);
+  assert.equal(line.texturesMs, 0.2);
+  assert.equal(line.texturesMb, 0.1);
+  assert.equal(line.gpuMs, 1.7);
+  assert.equal(line.backMs, 0.1);
+  assert.equal(line.backMb, 0.9);
+  // No "frame presented" line is needed: the frame line carries the count itself.
+  assert.equal(summary.lastFrame.frame, 18432);
+  assert.equal(summary.lastFrame.draws, null);
+});
+
+test('a log mixing both frame-line forms parses, and the newest numbered line wins', () => {
+  const mixed = parseLogLines(
+    [OLD_FRAME, presentLine(8192), stripControl(NEW_FRAME_COLOURED), OLD_FRAME],
+    'mixed.log',
+  ).summary;
+  assert.equal(mixed.fps.samples, 3);
+  assert.equal(mixed.lastFrameLine.frame, null, 'the last line is the old form');
+  assert.equal(mixed.lastFrame.frame, 18432, 'the newest numbered line, not the old present line');
+});
+
+// The copystat lines exactly as copystat.rs formats them, old and new.
+const OLD_COPIES =
+  '2026-11-25T04:17:12.475238Z  INFO victory_gpu::copystat: copies per frame: 1.0 submissions; ' +
+  '2 title copies 3.0 MB; table fills 4.0 MB asked, 5.0 MB filled in 0.10 ms; 6 refreshes 7.0 MB, ' +
+  '8 skipped 9.0 MB; 10 runs 0.20 ms; 11 queries 0.30 ms, moves 0.40 ms, 12.0 MB unmapped; ' +
+  '13 page faults; 14 watches 0.50 ms (1 failed 0.01 ms), 15.0 MB checked, 16.0 MB unchanged; ' +
+  '18 fallbacks; 19 guard faults; 20 idle copies kept, 21 let go by pressure; textures 22.0 MB watched ' +
+  'and changed, 23.0 MB hashed, 24.0 MB of them changed';
+const NEW_COPIES =
+  '2026-11-26T05:02:11.800000Z  INFO victory_gpu::copystat: copies per frame: 1.0 submissions; ' +
+  '2 title copies 3.0 MB; table fills 4.0 MB asked, 5.0 MB filled in 0.10 ms; ' +
+  'descriptor-copy sync 0.25 ms (12 records); 6 refreshes 7.0 MB, 8 skipped 9.0 MB; ' +
+  '10 runs 0.20 ms; 11 queries 0.30 ms, moves 0.40 ms, 12.0 MB unmapped; 13 page faults; ' +
+  '14 watches 0.50 ms (1 failed 0.01 ms), 15.0 MB asked about (repeats counted), 16.0 MB unchanged, ' +
+  '17 distinct pages since the last present; 18 fallbacks; 19 guard faults; 20 idle copies kept, ' +
+  '21 let go by pressure; textures 22.0 MB watched and changed, 23.0 MB hashed, 24.0 MB of them changed';
+const OLD_RECORDING =
+  '2026-11-25T04:17:12.475238Z  INFO victory_gpu::copystat: recording per frame (105 frames): ' +
+  '29 list calls 4.6 ms (all recording threads); 0.0 ms waiting for pipelines; dynamic slots: ' +
+  '3 tables asked, 0 refused, 0.0 ms searching; notes 0.0 ms; shader-written ranges: 0 steps in ' +
+  '0 submissions, snapshots 0.0 ms, 0.0 MB compared back; sparse reads 0.0 ms; guards 0.7 ms; ' +
+  '0.0 MB copied whole (memory not watched); 0.0 frame waits sleeping 0.0 ms (all threads); ' +
+  'ranges of shaders that cannot store to buffers: 0 steps 0.0 MB left out';
+const NEW_RECORDING =
+  '2026-11-26T05:02:11.800000Z  INFO victory_gpu::copystat: recording per frame (105 frames): ' +
+  '29 list calls 4.6 ms (all recording threads); 0.0 ms waiting for pipelines; dynamic slots: ' +
+  '3 tables asked, 0 refused, 0.0 ms searching; notes 0.0 ms; shader-written ranges: 0 steps in ' +
+  '0 submissions, snapshots 0.0 ms, 0.0 MB compared back; sparse reads 0.0 ms; ' +
+  "42 guards in 0.7 ms (the fault handler's included); 0.0 MB copied whole (memory not watched); " +
+  '0.0 frame waits sleeping 0.0 ms (all threads); ranges of shaders that cannot store to buffers: ' +
+  '0 steps 0.0 MB left out';
+
+test('copy stats: the old "MB checked" and "guards X ms" forms parse', () => {
+  const { summary } = parseLogLines([OLD_COPIES, OLD_RECORDING], 'old-copystat.log');
+  assert.deepEqual(summary.copyStats, {
+    descriptorCopySyncMs: null,
+    descriptorCopyRecords: null,
+    distinctPages: null,
+    guardCount: null,
+    guardsMs: 0.7,
+    askedAboutMb: 15,
+  });
+});
+
+test('copy stats: the new forms parse the distinct pages, guard count and descriptor-copy sync', () => {
+  const { summary } = parseLogLines([NEW_COPIES, NEW_RECORDING], 'new-copystat.log');
+  assert.deepEqual(summary.copyStats, {
+    descriptorCopySyncMs: 0.25,
+    descriptorCopyRecords: 12,
+    distinctPages: 17,
+    guardCount: 42,
+    guardsMs: 0.7,
+    askedAboutMb: 15,
+  });
+});
+
+test('copy stats: a log mixing the two copystat forms fills what each line carries', () => {
+  const oldThenNew = parseLogLines([OLD_COPIES, NEW_RECORDING], 'mixed-copystat.log').summary;
+  assert.equal(oldThenNew.copyStats.descriptorCopySyncMs, null);
+  assert.equal(oldThenNew.copyStats.distinctPages, null);
+  assert.equal(oldThenNew.copyStats.guardCount, 42, 'the new recording line');
+  assert.equal(oldThenNew.copyStats.askedAboutMb, 15, 'the old "MB checked"');
+  const newThenOld = parseLogLines([NEW_COPIES, OLD_RECORDING], 'mixed-copystat.log').summary;
+  assert.equal(newThenOld.copyStats.descriptorCopySyncMs, 0.25);
+  assert.equal(newThenOld.copyStats.distinctPages, 17);
+  assert.equal(newThenOld.copyStats.guardCount, null);
+  assert.equal(newThenOld.copyStats.guardsMs, 0.7, 'the old "guards X ms"');
+});
+
+test('observers and the switches set are read from their start-up lines', () => {
+  const lines = [
+    '2026-11-26T05:02:10.000000Z  INFO victory_gpu::host: observers on: the debug layer, ' +
+      'GPU-based validation, DRED, GPU timing, the memory map walk, the counting allocator',
+    '2026-11-26T05:02:10.100000Z  INFO victory_gpu::switches: diagnostic switch set ' +
+      'switch=VICTORY_D3D12_DEBUG value=1 on=true',
+    '2026-11-26T05:02:10.200000Z  INFO victory_gpu::switches: diagnostic switch set ' +
+      'switch=VICTORY_MEMORY_MAP value=0 on=false',
+  ];
+  const { summary } = parseLogLines(lines, 'observers.log');
+  assert.deepEqual(summary.observers, [
+    'the debug layer',
+    'GPU-based validation',
+    'DRED',
+    'GPU timing',
+    'the memory map walk',
+    'the counting allocator',
+  ]);
+  assert.deepEqual(summary.switches, [
+    { name: 'VICTORY_D3D12_DEBUG', value: '1', on: true },
+    { name: 'VICTORY_MEMORY_MAP', value: '0', on: false },
+  ]);
+});
+
+test('a log without the observers or switch lines reports none of them', () => {
+  const { summary } = parseLogLines([OLD_FRAME], 'plain.log');
+  assert.equal(summary.observers, null);
+  assert.deepEqual(summary.switches, []);
+  assert.equal(summary.copyStats, null);
+});
+
+test('the speed work\'s "buffer copies per frame" line is not taken for a copystat line', () => {
+  const bufferCopies =
+    '2026-11-25T00:00:00.000000Z  INFO victory_gpu::host: buffer copies per frame: 5 on the card ' +
+    'from host copies (2.0 MB), 1 read from title memory on the CPU (1.0 MB: the switch off 0), ' +
+    '4 of them settled the flights in the air (0.8 MB)';
+  const { summary } = parseLogLines([bufferCopies], 'buffer.log');
+  assert.equal(summary.copyStats, null);
+});
+
+test('device removal: "after logged frame" uses the frame line number when the build prints it', () => {
+  const removal =
+    '2026-11-26T05:02:20.000000Z ERROR victory_gpu::host: host GPU device removed after a submission of 2 lists';
+  const { summary, firstTs, lastTs } = parseLogLines([OLD_FRAME, presentLine(8192), stripControl(NEW_FRAME_COLOURED), removal], 'removed.log');
+  assert.equal(summary.lastFrame.frame, 18432);
+  assert.equal(parseExtras([OLD_FRAME, presentLine(8192), stripControl(NEW_FRAME_COLOURED), removal], firstTs, lastTs).ending.frame, 18432);
 });

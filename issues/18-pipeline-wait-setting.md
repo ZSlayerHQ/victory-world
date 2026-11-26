@@ -1,7 +1,7 @@
 # 18 — Test a longer pipeline wait, visuals first
 
 - **Title:** Test a longer pipeline wait against the dropped draws
-- **Lane:** Speed
+- **Lane:** CPU threading (draw preparation across cores)
 - **Files owned:** none; one run with a setting changed
 - **Symptom:** the runtime waits at most 500 ms a frame for pipelines being made, then draws the frame without them; about 800 to 1,500 draws are dropped over ten minutes, mostly one reflection pass and ray-traced shading. This asks whether waiting longer brings picture back.
 - **Evidence:** run `fork-caption`'s summary: about 835 "being made" drops over the run.

@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 // Shared parsing for VIctory run logs. summarize-run.mjs and experiment-table.mjs both use it.
 import fs from 'node:fs';
+import { comparableVerdict, parseLoadLine, thresholds } from './load-line.mjs';
 
-export const ANSI_RE = /\x1b\[[0-9;]*m/g;
-export const stripAnsi = (s) => s.replace(ANSI_RE, '');
+// Any control sequence, not only colours: CSI (colours, cursor moves), OSC (window titles), two-character escapes
+// such as ESC ( B, and the 8-bit CSI. One function, so every parser strips the same set (precompile-progress.mjs and
+// shader-compile-report.mjs import it too). `stripAnsi` and `ANSI_RE` stay as the older names.
+export const CONTROL_RE =
+  /(?:\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[ -/]*[@-~])|\x9b[0-?]*[ -/]*[@-~])/g;
+export const stripControl = (s) => String(s).replace(CONTROL_RE, '');
+export const ANSI_RE = CONTROL_RE;
+export const stripAnsi = stripControl;
 
 const num = Number;
 export const median = (xs) => {
@@ -22,11 +29,61 @@ export const percentile = (xs, p) => {
   return s[Math.min(rank, s.length - 1)];
 };
 
+// The frame line: builds before job/honest-counters start with "X fps, ...", builds from it on
+// with "frame N, X fps, ...". Named groups, because the optional frame number moves the numeric ones.
 export const FRAME_RE =
-  /^(\S+Z)\s+\w+\s+\S+:\s+([\d.]+) fps, ([\d.]+) ms\/frame \((.*?)\), (\d+) draws\/frame, dropped (\d+) without a host pipeline \((\d+) being made\) and (\d+) indirect/;
+  /^(\S+Z)\s+\w+\s+\S+:\s+(?:frame (?<frame>\d+), )?(?<fps>[\d.]+) fps, (?<ms>[\d.]+) ms\/frame \((?:.*?)\), (?<draws>\d+) draws\/frame, dropped (?<dropped>\d+) without a host pipeline \((?<making>\d+) being made\) and (?<indirect>\d+) indirect/;
+// "textures X ms Y MB" before the rename, "textures hashed X ms Y MB" from job/honest-counters on.
 export const COST_RE =
-  /([\d.]+) preparing: copies ([\d.]+) ms ([\d.]+) MB, textures ([\d.]+) ms ([\d.]+) MB; ([\d.]+) on the GPU; ([\d.]+) copying back ([\d.]+) MB/;
+  /([\d.]+) preparing: copies ([\d.]+) ms ([\d.]+) MB, textures (?:hashed )?([\d.]+) ms ([\d.]+) MB; ([\d.]+) (?:on the GPU|host waits \(for the relay [\d.]+, for flights' fence [\d.]+, synchronous submissions sent to retired [\d.]+\)); ([\d.]+) copying back ([\d.]+) MB/;
 const PRESENT_RE = /frame presented .*frame=(\d+) draws=(\d+) drawn=(\d+) dispatches=(\d+) dispatched=(\d+)/;
+
+// The copystat lines. job/honest-counters renames the checked bytes ("MB asked about (repeats
+// counted)"), adds the distinct pages since the last present and the descriptor-copy sync, and
+// turns "guards X ms" into "N guards in X ms (the fault handler's included)". Older builds keep
+// their form, and every field stays null when the line does not carry it.
+const COPIES_LINE_RE = /(?<!buffer )\bcopies per frame:/;
+const RECORDING_LINE_RE = /\brecording per frame(?: \([\d.]+ frames\))?:/;
+const DESCRIPTOR_COPY_RE = /descriptor-copy sync ([\d.]+) ms \((\d+) records?\)/;
+const ASKED_ABOUT_RE = /([\d.]+) MB (?:checked|asked about \(repeats counted\))/;
+const DISTINCT_PAGES_RE = /(\d+) distinct pages since the last present/;
+const GUARDS_RE = /(\d+) guards in ([\d.]+) ms \(the fault handler's included\)/;
+const GUARDS_OLD_RE = /\bguards ([\d.]+) ms;/;
+// The runtime's start-up line ("observers on: the debug layer, GPU-based validation, ...") and
+// the one line each switch set to a non-default state prints.
+const OBSERVERS_RE = /\bobservers on:\s*(.*)$/;
+const DIAGNOSTIC_SWITCH_RE =
+  /\bdiagnostic switch set\b.*?\bswitch=(\S+)\s+value=(.*?)\s+on=(true|false)\s*$/;
+
+function parseCopystatLine(line) {
+  const copies = COPIES_LINE_RE.test(line);
+  const recording = RECORDING_LINE_RE.test(line);
+  if (!copies && !recording) return null;
+  const out = {};
+  if (copies) {
+    const descriptor = line.match(DESCRIPTOR_COPY_RE);
+    if (descriptor) {
+      out.descriptorCopySyncMs = num(descriptor[1]);
+      out.descriptorCopyRecords = num(descriptor[2]);
+    }
+    const asked = line.match(ASKED_ABOUT_RE);
+    if (asked) out.askedAboutMb = num(asked[1]);
+    const distinct = line.match(DISTINCT_PAGES_RE);
+    if (distinct) out.distinctPages = num(distinct[1]);
+  }
+  if (recording) {
+    const guards = line.match(GUARDS_RE);
+    if (guards) {
+      out.guardCount = num(guards[1]);
+      out.guardsMs = num(guards[2]);
+    } else {
+      const oldGuards = line.match(GUARDS_OLD_RE);
+      if (oldGuards) out.guardsMs = num(oldGuards[1]);
+    }
+  }
+  return out;
+}
+
 // Both "host pipeline refused" (graphics/compute) and "host mesh pipeline refused".
 const REFUSED_RE = /host (?:mesh )?pipeline refused .*shaders=\[(.*?)\]/;
 const SLOW_RE = /slow host submission ms=(\d+) lists=(\d+) pipelines=\{(.*)\}/;
@@ -90,7 +147,7 @@ export function readLogLines(path) {
 }
 
 export function parseTranslationFailures(lines) {
-  if (typeof lines === 'string') lines = lines.replace(ANSI_RE, '').split(/\r?\n/);
+  if (typeof lines === 'string') lines = stripControl(lines).split(/\r?\n/);
   const out = [];
   for (const line of lines) {
     const m = line.match(SHADER_FAILURE_RE);
@@ -106,7 +163,7 @@ export function parseTranslationFailures(lines) {
   return out;
 }
 
-export function parseLogLines(lines, path) {
+export function parseLogLines(lines, path, options = {}) {
   const frames = []; // frame-rate lines
   const presented = [];
   const refused = [];
@@ -118,11 +175,38 @@ export function parseLogLines(lines, path) {
   const failures = [];
   const hangs = [];
   const driverEvents = [];
+  const load = { start: null, end: null };
+  const copyStats = {};
+  const switches = new Map();
+  let copyStatsSeen = false;
+  let observers = null;
   let firstTs = null;
   let lastTs = null;
 
   for (const line of lines) {
     if (!line) continue;
+    const loadAt = parseLoadLine(line);
+    if (loadAt) load[loadAt.when] = loadAt;
+    const copystat = parseCopystatLine(line);
+    if (copystat) {
+      copyStatsSeen = true;
+      for (const [key, value] of Object.entries(copystat)) copyStats[key] = value;
+    }
+    const observerLine = line.match(OBSERVERS_RE);
+    if (observerLine) {
+      observers = observerLine[1]
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean);
+    }
+    const diagnosticSwitch = line.match(DIAGNOSTIC_SWITCH_RE);
+    if (diagnosticSwitch) {
+      switches.set(diagnosticSwitch[1], {
+        name: diagnosticSwitch[1],
+        value: diagnosticSwitch[2].trim(),
+        on: diagnosticSwitch[3] === 'true',
+      });
+    }
     const m = line.match(/^(\S+Z)\s/);
     if (m) {
       const t = ts(m[1]);
@@ -136,12 +220,13 @@ export function parseLogLines(lines, path) {
       const costs = line.match(COST_RE);
       frames.push({
         ts: r[1],
-        fps: num(r[2]),
-        ms: num(r[3]),
-        draws: num(r[5]),
-        dropped: num(r[6]),
-        making: num(r[7]),
-        indirect: num(r[8]),
+        frame: r.groups.frame === undefined ? null : num(r.groups.frame),
+        fps: num(r.groups.fps),
+        ms: num(r.groups.ms),
+        draws: num(r.groups.draws),
+        dropped: num(r.groups.dropped),
+        making: num(r.groups.making),
+        indirect: num(r.groups.indirect),
         preparing: costs ? num(costs[1]) : null,
         copiesMs: costs ? num(costs[2]) : null,
         copiesMb: costs ? num(costs[3]) : null,
@@ -191,6 +276,15 @@ export function parseLogLines(lines, path) {
   const fps = frames.map((f) => f.fps);
   const worst = [...frames].sort((a, b) => a.fps - b.fps).slice(0, 5);
   const last = frames.at(-1) || null;
+  // The frame line's own number is the present count, once a build prints it; the old
+  // power-of-two "frame presented ... frame=N" line is only the fallback.
+  const lastNumbered = [...frames].reverse().find((f) => f.frame !== null) || null;
+  const lastPresent = presented.at(-1) || null;
+  const lastFrame = lastPresent
+    ? { ...lastPresent, frame: lastNumbered ? lastNumbered.frame : lastPresent.frame }
+    : lastNumbered
+      ? { frame: lastNumbered.frame, draws: null, dispatches: null }
+      : null;
   const missingBy = {};
   for (const m of missing) {
     const k = `format ${m.format} ${m.w}x${m.h} x${m.samples}`;
@@ -198,11 +292,35 @@ export function parseLogLines(lines, path) {
   }
   const duration =
     firstTs !== null && lastTs !== null ? Math.round((lastTs - firstTs) / 1000) : null;
+  const limits = thresholds(options.env);
+  const comparable = comparableVerdict(load, limits);
 
+  const copyStatsOut = copyStatsSeen
+    ? {
+        descriptorCopySyncMs: null,
+        descriptorCopyRecords: null,
+        distinctPages: null,
+        guardCount: null,
+        guardsMs: null,
+        askedAboutMb: null,
+        ...copyStats,
+      }
+    : null;
   const summary = {
     file: path,
+    comparable: comparable.text,
+    load: { start: load.start, end: load.end, limits },
     durationSeconds: duration,
-    lastFrame: presented.at(-1) || null,
+    lastFrame,
+    copyStats: copyStatsOut,
+    // The same figures flat, beside lastFrameLine's own, for a consumer that wants one path.
+    descriptorCopySyncMs: copyStatsOut ? copyStatsOut.descriptorCopySyncMs : null,
+    descriptorCopyRecords: copyStatsOut ? copyStatsOut.descriptorCopyRecords : null,
+    distinctPages: copyStatsOut ? copyStatsOut.distinctPages : null,
+    guardCount: copyStatsOut ? copyStatsOut.guardCount : null,
+    guardsMs: copyStatsOut ? copyStatsOut.guardsMs : null,
+    observers,
+    switches: [...switches.values()],
     fps: {
       samples: fps.length,
       median: median(fps),
@@ -248,9 +366,11 @@ export function parseRunDetails(path) {
 export const HARNESS_ENDED_RE =
   /^harness: ended by --(?:heavy|settled)-seconds after ([\d.]+) s of (heavy|settled) scene\s*$/;
 /// The settle marker run-world.sh's settled watcher appends, and the cap that ends an unsettled run.
-export const HARNESS_SETTLED_RE = /^harness: settled at (\d+) s \(waiting (\d+), ([\d.]+) fps\)\s*$/;
+export const HARNESS_SETTLED_RE = /^harness: settled at (\d+) s \(waiting (\d+), ([\d.]+) fps\)(?:; waited: .*)?\s*$/;
 export const HARNESS_SETTLE_TIMEOUT_RE =
   /^harness: ended by --settled-timeout after ([\d.]+) s: the scene never settled\s*$/;
+/// The free-space guard's end line (run-world.sh's disk-guard watcher).
+export const HARNESS_DISK_RE = /^harness: ended: disk below ([\d.]+) GB\s*$/;
 
 // The runtime's own lines for how it ended: kernel.rs logs a title-chosen exit, main.rs logs the runtime's
 // normal end. run-world.sh appends the game process's own exit code before the summary.
@@ -361,7 +481,7 @@ function parseDred(lines) {
 // says "a diagnostics build with VICTORY_D3D12_DEBUG=1 names the command", which is not a
 // record of what the run set.
 const HEADER_ENV_RE = /^harness env:\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
-const HEADER_LINE_RE = /^harness (?:build|env):/;
+const HEADER_LINE_RE = /^harness (?:build|checkout|env):/;
 const FALSEY_RE = /^(?:0|false|off|disabled|no|none)$/i;
 
 function parseSettings(lines) {
@@ -420,16 +540,28 @@ export function parseExtras(lines, firstTs, lastTs) {
     if (removalTs === null) removalTs = lastTs;
     if (firstTs !== null && removalTs !== null)
       removalSeconds = Math.round((removalTs - firstTs) / 1000);
+    // The frame line's own number when the build prints it, the old power-of-two present
+    // line otherwise.
+    let lastNumbered = null;
+    let lastPresent = null;
     for (let i = 0; i <= removalIndex; i += 1) {
-      const m = lines[i].match(PRESENT_RE);
-      if (m) removalFrame = num(m[1]);
+      const frame = lines[i].match(FRAME_RE);
+      if (frame && frame.groups.frame !== undefined) lastNumbered = num(frame.groups.frame);
+      const present = lines[i].match(PRESENT_RE);
+      if (present) lastPresent = num(present[1]);
     }
+    removalFrame = lastNumbered ?? lastPresent;
   }
 
   let ending;
   const harnessEnded = lines.map((line) => line.match(HARNESS_ENDED_RE)).find(Boolean);
+  const diskEnded = lines.map((line) => line.match(HARNESS_DISK_RE)).find(Boolean);
   const titleEnded = lines.map((line) => line.match(TITLE_ENDED_RE)).find(Boolean);
   const victoryExit = lines.map((line) => line.match(HARNESS_VICTORY_EXIT_RE)).find(Boolean);
+  const settledTimeout = lines.some((line) => HARNESS_SETTLE_TIMEOUT_RE.test(line));
+  // The line the harness closes a log with. A log without one was cut short (a full drive, a killed shell), and
+  // that is a different finding from a process that exited with no failure line.
+  const closingHarnessLine = Boolean(harnessEnded || diskEnded || victoryExit || settledTimeout);
   const exitCode = victoryExit ? num(victoryExit[1]) : null;
   if (harnessEnded) {
     const seconds = num(harnessEnded[1]);
@@ -438,6 +570,13 @@ export function parseExtras(lines, firstTs, lastTs) {
       seconds,
       frame: null,
       text: `ended by the harness after ${harnessEnded[1]} s of ${harnessEnded[2]} scene`,
+    };
+  } else if (diskEnded) {
+    ending = {
+      kind: 'disk_low',
+      seconds: null,
+      frame: null,
+      text: `ended: disk below ${diskEnded[1]} GB`,
     };
   } else if (removalIndex >= 0) {
     const text = `device removed @ ${removalSeconds === null ? '?' : removalSeconds} s, after logged frame ${removalFrame === null ? '—' : removalFrame}`;
@@ -465,6 +604,13 @@ export function parseExtras(lines, firstTs, lastTs) {
     exitCode === 0
   ) {
     ending = { kind: 'clean_exit', seconds: null, frame: null, text: 'clean exit' };
+  } else if (!closingHarnessLine) {
+    ending = {
+      kind: 'log_cut_short',
+      seconds: null,
+      frame: null,
+      text: 'log cut short: no closing harness line',
+    };
   } else {
     ending = { kind: 'log_ends', seconds: null, frame: null, text: 'log ends' };
   }
@@ -480,7 +626,6 @@ export function parseExtras(lines, firstTs, lastTs) {
   const settled = settledLine
     ? { seconds: num(settledLine[1]), waiting: num(settledLine[2]), fps: num(settledLine[3]) }
     : null;
-  const settledTimeout = lines.some((line) => HARNESS_SETTLE_TIMEOUT_RE.test(line));
   return { ending, hung, dred, settings: parseSettings(lines), settled, settledTimeout };
 }
 

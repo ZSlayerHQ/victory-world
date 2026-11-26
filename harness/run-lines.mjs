@@ -22,10 +22,10 @@ export const TABLE_CONSTANTS_RE = new RegExp(
 export const BUFFER_COPIES_RE = new RegExp(
   String.raw`buffer copies per frame: ${N} on the card from host copies \(${N} MB\), ${N} read from title memory on the CPU \(${N} MB: (.*?)\), ${N} of them settled the flights in the air \(${N} MB\)`,
 );
-export const SETTLE_MS_RE = /of the waiting for the card in settles, per frame, by what settled:\s*(.*)$/;
+export const SETTLE_MS_RE = /of the (?:waiting for the card in settles|host time waiting for settles), per frame, by what settled:\s*(.*)$/;
 export const LEFT_OUT_RE = new RegExp(String.raw`dropped ${N}/frame without a host pipeline: (.*)$`);
 export const AHEAD_RE =
-  /submissions sent ahead per frame: ([\d.]+) in ([\d.]+) settles \(([\d.]+) flights each time\), ([\d.]+) ms waiting for the card in them; settled for: (.*?)(?:;|$)/;
+  /submissions sent ahead per frame: ([\d.]+) in ([\d.]+) settles \((?:([\d.]+) flights each time|flights landed by the relay)\), ([\d.]+) ms (?:waiting for the card in them|host time waiting for settles); settled for: (.*?)(?:;|$)/;
 
 /// Splits a comma-separated list on its own commas, ignoring commas inside parentheses.
 export function splitTopLevel(text) {
@@ -116,7 +116,7 @@ export function parseBufferCopies(line) {
   };
 }
 
-/// "of the waiting for the card in settles, per frame, by what settled: reason ms, reason ms, ...".
+/// "of the (?:waiting for the card in settles|host time waiting for settles), per frame, by what settled: reason ms, reason ms, ...".
 export function parseSettleMs(line) {
   const m = line.match(SETTLE_MS_RE);
   if (!m) return null;
@@ -127,6 +127,14 @@ export function parseSettleMs(line) {
     if (kv) out[kv[1].trim()] = Number(kv[2]);
   }
   return out;
+}
+
+/// The recording threads' per-frame wait for pipelines, from the copystat line ("…; 0.0 ms waiting for pipelines;").
+const PIPELINE_WAIT_RE = /(?:^|\s)([\d.]+) ms waiting for pipelines/;
+
+export function parsePipelineWait(line) {
+  const m = line.match(PIPELINE_WAIT_RE);
+  return m ? Number(m[1]) : null;
 }
 
 /// "dropped N/frame without a host pipeline: <reason>".
@@ -165,6 +173,59 @@ export function parseAhead(line) {
     flightsEach: Number(m[3]),
     waiting: Number(m[4]),
     reasons: splitTopLevel(m[5]).map(parseReasonPart).filter(Boolean),
+  };
+}
+
+/// "null magenta: frame=… substituted=… … examples=…": per-frame write counters for a view left null, plus up to a
+/// few "slot:why" examples (or "-" when none). A line's counters run until a later frame first counts.
+const NULL_MAGENTA_RE = new RegExp(
+  String.raw`null magenta: frame=(\d+) substituted=(\d+) never_made=(\d+) waiting=(\d+) let_go=(\d+) ` +
+    String.raw`cannot_make=(\d+) unmapped=(\d+) stale=(\d+) left_depth=(\d+) left_integer=(\d+) left_other=(\d+) ` +
+    String.raw`left_no_view=(\d+) examples=(\S+)`,
+);
+
+export function parseNullMagenta(line) {
+  const m = line.match(NULL_MAGENTA_RE);
+  if (!m) return null;
+  return {
+    frame: Number(m[1]),
+    substituted: Number(m[2]),
+    neverMade: Number(m[3]),
+    waiting: Number(m[4]),
+    letGo: Number(m[5]),
+    cannotMake: Number(m[6]),
+    unmapped: Number(m[7]),
+    stale: Number(m[8]),
+    left: { depth: Number(m[9]), integer: Number(m[10]), other: Number(m[11]), noView: Number(m[12]) },
+    examples: m[13] === '-' ? [] : m[13].split(','),
+  };
+}
+
+/// The first-touch scoreboard, ending "…; health: N guards put on, N faults taken, N guards gone with no fault, N
+/// pages passed over as a kernel write or the platform layer held them, N not armed for their protection, N
+/// openings around our own kernel copies; the instrument's cost X.XXX ms a frame". A line whose silent count is
+/// above zero starts "NOT CLEAN: N guards went with no fault (…)" and is logged as a warning.
+const FIRST_TOUCH_RE = new RegExp(
+  String.raw`(?:NOT CLEAN: (\d+) guards went with no fault[^;]*;\s*)?health: (\d+) guards put on, ` +
+    String.raw`(\d+) faults taken, (\d+) guards gone with no fault, ` +
+    String.raw`(\d+) pages passed over as a kernel write or the platform layer held them, ` +
+    String.raw`(\d+) not armed for their protection, (\d+) openings around our own kernel copies; ` +
+    String.raw`the instrument's cost ([0-9.]+) ms a frame`,
+);
+
+export function parseFirstTouch(line) {
+  const m = line.match(FIRST_TOUCH_RE);
+  if (!m) return null;
+  return {
+    clean: m[1] === undefined,
+    silent: Number(m[1] ?? m[4]),
+    guardsPutOn: Number(m[2]),
+    faultsTaken: Number(m[3]),
+    goneNoFault: Number(m[4]),
+    passedOver: Number(m[5]),
+    notArmed: Number(m[6]),
+    openings: Number(m[7]),
+    costMs: Number(m[8]),
   };
 }
 
@@ -234,6 +295,26 @@ export function aggregate(extra) {
     },
     settleReasons,
     leftOut,
+    // The recording threads' wait for pipelines a frame, median over the window: high means the scene was still
+    // compiling (a first visit) and the window is not a benchmark.
+    pipelineWaitMs: extra.pipelineWaits.length ? median(extra.pipelineWaits) : null,
+    // The latest null-magenta line (its counters are per frame), with the worst frame's substituted count, and the
+    // first-touch line's last scoreboard with clean=false when ANY line said NOT CLEAN.
+    nullMagenta: extra.nullMagenta.length
+      ? {
+          ...extra.nullMagenta[extra.nullMagenta.length - 1],
+          worstSubstituted: Math.max(...extra.nullMagenta.map((s) => s.substituted)),
+          lines: extra.nullMagenta.length,
+        }
+      : null,
+    firstTouch: extra.firstTouch.length
+      ? {
+          ...extra.firstTouch[extra.firstTouch.length - 1],
+          clean: extra.firstTouch.every((s) => s.clean),
+          worstSilent: Math.max(...extra.firstTouch.map((s) => s.silent)),
+          lines: extra.firstTouch.length,
+        }
+      : null,
     threads: {
       named: Object.fromEntries([...namedSamples].map(([name, samples]) => [name, threadMedian(samples)])),
       other: threadMedian(otherSamples),
@@ -250,7 +331,18 @@ const threadMedian = (samples) =>
 /// Every new line of a log from `start` on, parsed; capabilities come from anywhere in the log (printed once, at
 /// the start).
 export function collect(lines, start = 0) {
-  const out = { capabilities: null, tableConstants: [], bufferCopies: [], settleMs: [], leftOut: [], threads: [], aheads: [] };
+  const out = {
+    capabilities: null,
+    tableConstants: [],
+    bufferCopies: [],
+    settleMs: [],
+    leftOut: [],
+    threads: [],
+    aheads: [],
+    nullMagenta: [],
+    firstTouch: [],
+    pipelineWaits: [],
+  };
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (!out.capabilities) out.capabilities = parseCapabilities(line);
@@ -267,6 +359,12 @@ export function collect(lines, start = 0) {
     if (th) out.threads.push(th);
     const ahead = parseAhead(line);
     if (ahead) out.aheads.push(ahead);
+    const nm = parseNullMagenta(line);
+    if (nm) out.nullMagenta.push(nm);
+    const ft = parseFirstTouch(line);
+    if (ft) out.firstTouch.push(ft);
+    const pw = parsePipelineWait(line);
+    if (pw !== null) out.pipelineWaits.push(pw);
   }
   return out;
 }

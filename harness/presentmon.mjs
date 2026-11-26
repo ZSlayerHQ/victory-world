@@ -37,8 +37,8 @@ export function findTrigger(lines, threshold = DEFAULT_THRESHOLD) {
   for (let i = 0; i < lines.length; i += 1) {
     const m = stripAnsi(lines[i]).match(FRAME_RE);
     if (!m) continue;
-    const draws = Number(m[5]);
-    const dropped = Number(m[6]);
+    const draws = Number(m.groups.draws);
+    const dropped = Number(m.groups.dropped);
     if (draws + dropped >= threshold) return { index: i, draws, dropped };
   }
   return null;

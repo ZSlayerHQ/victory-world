@@ -86,6 +86,15 @@ if (names.size) {
 
 const f = (x, d = 1) => (x === null || x === undefined ? '—' : Number(x).toFixed(d));
 console.log(`# Run summary — ${path}`);
+console.log(`comparable: ${out.comparable}`);
+console.log(`observers on: ${out.observers ? out.observers.join(', ') : 'not in the log'}`);
+if (out.switches.length) {
+  console.log(
+    `switches set: ${out.switches
+      .map((entry) => `${entry.name}=${entry.value} (${entry.on ? 'on' : 'off'})`)
+      .join(', ')}`,
+  );
+}
 console.log(
   `Range: ${duration === null ? '—' : duration + ' s'}; last presented frame: ${out.lastFrame ? out.lastFrame.frame : '—'}`,
 );
@@ -108,8 +117,23 @@ if (presentmon) {
 }
 if (out.costs) {
   console.log(
-    `Last frame: ${f(last.ms)} ms — preparing ${f(last.preparing)} (copies ${f(last.copiesMs)} ms / ${f(last.copiesMb)} MB, textures ${f(last.texturesMs)} ms / ${f(last.texturesMb)} MB), GPU ${f(last.gpuMs)} ms, readback ${f(last.backMs)} ms / ${f(last.backMb)} MB; draws ${last.draws}, dropped ${last.dropped} (${last.making} being made), indirect ${last.indirect}`,
+    `Last frame: ${last.frame === null ? '' : `frame ${last.frame}, `}${f(last.ms)} ms — preparing ${f(last.preparing)} (copies ${f(last.copiesMs)} ms / ${f(last.copiesMb)} MB, textures hashed ${f(last.texturesMs)} ms / ${f(last.texturesMb)} MB), GPU ${f(last.gpuMs)} ms, readback ${f(last.backMs)} ms / ${f(last.backMb)} MB; draws ${last.draws}, dropped ${last.dropped} (${last.making} being made), indirect ${last.indirect}`,
   );
+}
+if (out.copyStats) {
+  const c = out.copyStats;
+  const parts = [];
+  if (c.descriptorCopySyncMs !== null) {
+    parts.push(
+      `descriptor-copy sync ${f(c.descriptorCopySyncMs, 2)} ms (${c.descriptorCopyRecords === null ? '—' : c.descriptorCopyRecords} records)`,
+    );
+  }
+  if (c.askedAboutMb !== null) parts.push(`${f(c.askedAboutMb)} MB asked about`);
+  if (c.distinctPages !== null)
+    parts.push(`${c.distinctPages} distinct pages since the last present`);
+  if (c.guardCount !== null) parts.push(`${c.guardCount} guards in ${f(c.guardsMs)} ms`);
+  else if (c.guardsMs !== null) parts.push(`guards ${f(c.guardsMs)} ms`);
+  if (parts.length) console.log(`Copy stats: ${parts.join(', ')}`);
 }
 // A run under a capture tool: its frame is not comparable, and its exit code is the tool's.
 if (lines.some((line) => /^harness: captured by RenderDoc/.test(line))) {
@@ -211,6 +235,27 @@ if (settleReasons.length) {
     for (const [sub, n] of Object.entries(entry.by)) console.log(`    - by ${sub}: ${f(n)}`);
   }
 }
+// The two instrument lines: a view left null counted while it is written, and the first-touch scoreboard. A run
+// whose first-touch line said NOT CLEAN says so here, in those words.
+if (speed.nullMagenta || speed.firstTouch) console.log('\n## Run health');
+if (speed.nullMagenta) {
+  const nm = speed.nullMagenta;
+  console.log(
+    `- null magenta: ${f(nm.substituted)} substituted a frame (worst ${f(nm.worstSubstituted)}), ` +
+      `${f(nm.neverMade)} never made, ${f(nm.waiting)} waiting, ${f(nm.cannotMake)} cannot make, ` +
+      `${f(nm.unmapped)} unmapped, ${f(nm.stale)} stale`,
+  );
+  if (nm.examples.length) console.log(`  - examples: ${nm.examples.slice(0, 6).join(', ')}`);
+}
+if (speed.firstTouch) {
+  const ft = speed.firstTouch;
+  console.log(
+    ft.clean
+      ? `- first touch: clean (${f(ft.guardsPutOn)} guards put on, ${f(ft.faultsTaken)} faults taken), cost ${ft.costMs.toFixed(3)} ms a frame`
+      : `- first touch: **NOT CLEAN** — ${f(ft.worstSilent)} guards went with no fault (${f(ft.guardsPutOn)} put on, ${f(ft.faultsTaken)} faults taken), cost ${ft.costMs.toFixed(3)} ms a frame`,
+  );
+}
+
 const threads = Object.entries(speed.threads.named)
   .sort((a, b) => b[1].user + b[1].kernel - (a[1].user + a[1].kernel))
   .slice(0, 12);

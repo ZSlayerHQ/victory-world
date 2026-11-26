@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './test-isolation.mjs';
 
 import {
   captureFolderFromLog,
@@ -55,6 +56,16 @@ test('watcher trigger: fires on the first frame line at or above the threshold, 
   // The log the watcher tails is raw: its lines still carry the console's ANSI colours.
   const coloured = '\x1b[2m' + frameLine('2026-11-24T12:00:04.000000Z', 1200) + '\x1b[0m';
   assert.deepEqual(findTrigger([coloured], 1000), { index: 0, draws: 1200, dropped: 0 });
+});
+
+test('watcher trigger: the runtime\'s "frame N, " prefix does not hide the frame line', () => {
+  const line =
+    '\x1b[2m2026-11-26T05:02:11.250000Z\x1b[0m \x1b[32m INFO\x1b[0m ' +
+    '\x1b[2mvictory_gpu::host\x1b[0m\x1b[2m:\x1b[0m ' +
+    'frame 18432, 27.4 fps, 36.5 ms/frame (0.4 preparing: copies 0.3 ms 1.2 MB, ' +
+    'textures hashed 0.2 ms 0.1 MB; 1.7 on the GPU; 0.1 copying back 0.9 MB), ' +
+    '5000 draws/frame, dropped 3 without a host pipeline (1 being made) and 7 indirect';
+  assert.deepEqual(findTrigger([line], 1000), { index: 0, draws: 5000, dropped: 3 });
 });
 
 test('watcher trigger: draws plus dropped reach the threshold when most draws are dropped', () => {
@@ -233,7 +244,7 @@ test('summaries read presentmon.csv from the log capture folder', (t) => {
   );
 
   const run = (script, args) =>
-    spawnSync(process.execPath, [path.join(here, script), ...args], { encoding: 'utf8' });
+    spawnSync(process.execPath, [path.join(here, script), ...args], { encoding: 'utf8', env: isolatedEnv() });
 
   const summary = run('summarize-run.mjs', [log]);
   assert.equal(summary.status, 0, summary.stderr);
