@@ -13,7 +13,7 @@
 // first runs on the machine that found this failed that way.
 //
 // Where the dump has no copy of the executable, `prepare` hardlinks every file of the dump and the executable into
-// `<stage>/<the dump's folder name>` and launches from there. Hardlinks, never copies: the install is over a hundred
+// `<stage>/<the manifest's title id>` and launches from there. Hardlinks, never copies: the install is over a hundred
 // gigabytes and a copy allocates it a second time. A source on another volume refuses, because a hardlink cannot
 // cross one.
 import fs from 'node:fs';
@@ -29,6 +29,13 @@ export function executableName(text) {
   const body = list ? list[1] : String(text);
   const name = /<Executable\b[^>]*?\bName\s*=\s*"([^"]+)"/i.exec(body);
   return name ? name[1] : null;
+}
+
+/// The title id a manifest gives, or null when it gives none. The stage folder is named from it: it is the identity
+/// the runtime already files a title's data under, and it is a hex code, so no folder ever carries the title's name.
+export function titleId(text) {
+  const id = /<TitleId>\s*([0-9A-Fa-f]+)\s*<\/TitleId>/i.exec(String(text));
+  return id ? id[1].toUpperCase() : null;
 }
 
 /// The volume a path is on, as Windows spells it ("c:"), for the hardlink test.
@@ -87,7 +94,8 @@ export function exeFor({ dir, name, hint }) {
 }
 
 /// What a launch needs, as one sentence when it is not there: the manifest, the name it gives, and that file.
-export function preflight(dir) {
+export function preflight(given) {
+  const dir = path.resolve(given);
   const manifest = path.join(dir, MANIFEST);
   if (!fs.existsSync(manifest)) {
     return {
@@ -177,7 +185,12 @@ export function prepare({ exe, manifest, stage: stageRoot }) {
   if (!stageRoot) {
     return { refusal: `refused: the dump at ${dir} has no ${name}, and no --stage folder was given to hardlink it in from ${found.exe}` };
   }
-  const staged = stage({ dir, exe: found.exe, name, at: path.join(stageRoot, path.basename(dir)) });
+  const staged = stage({
+    dir,
+    exe: found.exe,
+    name,
+    at: path.join(stageRoot, titleId(fs.readFileSync(manifestAt, 'utf8')) ?? 'dump'),
+  });
   if (staged.refusal) return staged;
   const checked = preflight(staged.dir);
   if (checked.refusal) return checked;

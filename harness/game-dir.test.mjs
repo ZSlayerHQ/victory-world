@@ -13,7 +13,7 @@ const script = path.join(here, 'game-dir.mjs');
 const MANIFEST_TEXT = [
   '<?xml version="1.0" encoding="utf-8"?>',
   '<Game configVersion="1">',
-  '  <TitleId>00000000</TitleId>',
+  '  <TitleId>ABCD1234</TitleId>',
   '  <ExecutableList>',
   '    <Executable Name="title.exe" Id="Game" TargetDeviceFamily="Scarlett" />',
   '  </ExecutableList>',
@@ -145,8 +145,8 @@ test('prepare stages the executable beside the manifest when the dump has no cop
   const prepared = prepare({ exe, stage: stageRoot });
   assert.equal(prepared.refusal, undefined, prepared.refusal);
   assert.equal(prepared.staged, true);
-  assert.equal(prepared.dir, path.join(stageRoot, 'dump'));
-  assert.equal(prepared.exe, path.join(stageRoot, 'dump', 'title.exe'));
+  assert.equal(prepared.dir, path.join(stageRoot, 'ABCD1234'));
+  assert.equal(prepared.exe, path.join(stageRoot, 'ABCD1234', 'title.exe'));
   assert.equal(prepared.linked, 4, 'the three files of the dump and the executable');
   for (const relative of ['data.rpf', path.join('pack', 'inner.rpf')]) {
     assert.equal(
@@ -190,8 +190,8 @@ test('the manifest can name the dump outright, and a manifest that is not there 
   const exe = exeIn(root);
   const stageRoot = path.join(tempDir(t), 'game');
   const prepared = prepare({ exe: path.join(root, 'nowhere', 'title.exe'), manifest: path.join(dir, MANIFEST), stage: stageRoot });
-  assert.equal(prepared.exe, path.join(stageRoot, 'dump', 'title.exe'));
-  assert.equal(path.basename(prepared.dir), 'dump');
+  assert.equal(prepared.exe, path.join(stageRoot, 'ABCD1234', 'title.exe'));
+  assert.equal(path.basename(prepared.dir), 'ABCD1234');
   const refused = prepare({ manifest: path.join(root, 'missing', MANIFEST), stage: stageRoot });
   assert.match(refused.refusal, /GAME_MANIFEST names .*missing.*, which does not exist/);
 });
@@ -214,8 +214,8 @@ test('the prepare command prints the executable to launch and the links it made'
   const stageRoot = path.join(tempDir(t), 'game');
   const result = run(['prepare', '--exe', exe, '--stage', stageRoot]);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), path.join(stageRoot, 'dump', 'title.exe'));
-  assert.match(result.stderr, /stage: 4 hardlinks under .*dump/);
+  assert.equal(result.stdout.trim(), path.join(stageRoot, 'ABCD1234', 'title.exe'));
+  assert.match(result.stderr, /stage: 4 hardlinks under .*ABCD1234/);
   const idle = path.join(tempDir(t), 'idle');
   fs.mkdirSync(idle);
   const refused = run(['prepare', '--exe', path.join(idle, 'nowhere.exe'), '--stage', stageRoot]);
