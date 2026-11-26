@@ -2,6 +2,8 @@
 
 Formerly `victory-world`; old links redirect.
 
+<p align="center"><a href="media/alfred-explains.mp4"><img src="media/alfred-explains.jpg" width="720" alt="Alfred, the project's butler, explains ZSlayer PC Port (95-second video)"></a><br><sub>Alfred explains the project in 95 seconds (click to watch, sound on).</sub></p>
+
 ZSlayer PC Port is working to get a console game (called "the title" below) running on a Windows PC. The program
 that does it, the runtime, lives in [zslayer-pc-port-runtime](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime):
 it runs the game's own code and translates its graphics so a PC graphics card can draw them. It is a fork of

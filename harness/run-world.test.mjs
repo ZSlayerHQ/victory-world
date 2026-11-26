@@ -162,6 +162,46 @@ test('both scripts are one main() read whole before it runs', () => {
   }
 });
 
+test('--live creates an empty control file in the run capture folder and passes its path', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-world-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bash = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+  fs.writeFileSync(path.join(dir, 'victory.toml'), '');
+  const result = spawnSync('bash', [script, '--live', '--print-env'], {
+    encoding: 'utf8',
+    env: isolatedEnv({
+      VICTORY_BIN: bash,
+      VICTORY_DIR: dir,
+      VICTORY_CONFIG: path.join(dir, 'victory.toml'),
+      GAME_EXE: path.join(dir, 'game.exe'),
+      VICTORY_CAPTURES: path.join(dir, 'captures'),
+    }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const liveLine = result.stdout.split(/\r?\n/).find((line) => line.startsWith('VICTORY_LIVE='));
+  assert.ok(liveLine, 'the runtime receives VICTORY_LIVE');
+  assert.match(liveLine, /\/live\.txt$/, 'the control file is in the capture folder');
+  assert.match(result.stdout, /^live:\s+live\.txt$/m, 'the terminal sees the file name only');
+
+  const captures = path.join(dir, 'captures');
+  const folders = fs.readdirSync(captures);
+  assert.equal(folders.length, 1);
+  const control = path.join(captures, folders[0], 'live.txt');
+  assert.equal(fs.existsSync(control), true, 'the control file is created before the run');
+  assert.equal(fs.statSync(control).size, 0, 'it starts empty');
+});
+
+test('--live writes the header line with the control file name, as the other switches do', () => {
+  const text = fs.readFileSync(script, 'utf8');
+  assert.match(text, /--live\) LIVE=1/);
+  assert.match(text, /LIVE_FILE=\$\{CAPTURE%\/\}\/live\.txt/);
+  assert.match(text, /: >"\$LIVE_FILE"/);
+  assert.match(text, /ENV_ARGS\+=\("VICTORY_LIVE=\$LIVE_FILE"\)/);
+  assert.match(text, /say "live: +\$\(basename "\$LIVE_FILE"\)"/);
+  assert.match(text, /echo "harness env: live=\$\(basename "\$LIVE_FILE"\)"/);
+  assert.match(text, /\[--live\]/);
+});
+
 test('--gpu-trace prints the Nsight command it would run, and the run starts the game under it', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-world-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

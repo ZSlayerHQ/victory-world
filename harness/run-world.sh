@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One VIctory world run, with the diagnostics that matter, condensed at exit.
-# usage: run-world.sh [--timing] [--volume N|off] [--no-record] [--presentmon] [--aftermath] [--warm] [--frames 2400,2600] [--keys '55:Enter,...']
+# usage: run-world.sh [--timing] [--volume N|off] [--no-record] [--presentmon] [--aftermath] [--warm] [--live] [--frames 2400,2600] [--keys '55:Enter,...']
 #                     [--route <name>] [--dump-targets] [--print-env] [--settled-seconds N] [--settled-after-s N]
 #                     [--settled-timeout N]
 #                     [--settled-fps F] [--settled-waiting K]
@@ -10,10 +10,12 @@
 # root each run's capture folder goes under; CAPTURE names one run's folder outright) and VICTORY_SAVE_BACKUPS come
 # from the environment, else harness/local.env on a machine that has one, else the main PC's E: paths below.
 # VICTORY_WARM_GENTLE=1 or 0 forces the --warm warm-up gentle or raised; unset, it is gentle while OBS is running (obs.sh).
+# --live makes an empty control file in the run's capture folder and points VICTORY_LIVE at it; harness/live.sh sets
+# a switch there while the title runs, and harness/live-report.mjs reads the segments it cuts from the log.
 # The body is one function, called once at the end, so bash has read every line before it runs anything: an edit to
 # this file during a run cannot change the rest of that run (world-run.sh runs a copy of it, too).
 usage() {
-  printf '%s\n' "usage: run-world.sh [--timing] [--volume N|off] [--no-record] [--presentmon] [--aftermath] [--warm] [--require-quiet]" \
+  printf '%s\n' "usage: run-world.sh [--timing] [--volume N|off] [--no-record] [--presentmon] [--aftermath] [--warm] [--live] [--require-quiet]" \
     "                     [--frames 2400,2600] [--keys '55:Enter,...'] [--route <name>] [--dump-targets]" \
     "                     [--print-env] [--settled-seconds N] [--settled-after-s N] [--settled-timeout N]" \
     "                     [--settled-fps F] [--settled-waiting K] [--console series-x|series-s]" \
@@ -53,6 +55,8 @@ TIMING=0
 PRESENTMON=0
 AFTERMATH=0
 WARM=0
+LIVE=0
+LIVE_FILE=""
 FRAMES=""
 KEYS=""
 ROUTE=""
@@ -92,6 +96,7 @@ while [ $# -gt 0 ]; do
     --presentmon) PRESENTMON=1; shift ;;
     --aftermath) AFTERMATH=1; shift ;;
     --warm) WARM=1; shift ;;
+    --live) LIVE=1; shift ;;
     --frames) FRAMES=$2; shift 2 ;;
     --keys) KEYS=$2; shift 2 ;;
     --route) ROUTE=$2; shift 2 ;;
@@ -206,6 +211,12 @@ LOG=$LOG_DIR/$STAMP-$TAG.log
 CAPTURES=${VICTORY_CAPTURES:-/captures}
 CAPTURE=${CAPTURE:-${CAPTURES%/}/$STAMP-$TAG}
 mkdir -p "$LOG_DIR" "$CAPTURE"
+# --live: the control file the runtime re-reads at frame boundaries. It starts empty (today's behaviour), and the
+# terminal sees only its file name; the log's header names it the same way.
+if [ "$LIVE" = 1 ]; then
+  LIVE_FILE=${CAPTURE%/}/live.txt
+  : >"$LIVE_FILE"
+fi
 
 BIN=${VICTORY_BIN:-$VICTORY_DIR/target/$PROFILE/victory.exe}
 if [ ! -x "$BIN" ]; then
@@ -249,6 +260,7 @@ if [ -n "$SETTLED_SECONDS" ]; then
   ENV_ARGS+=("VICTORY_KEYS_AFTER=$AFTER")
 fi
 [ -n "$COPY_MODE" ] && ENV_ARGS+=("VICTORY_COPY_MODE=$COPY_MODE")
+[ "$LIVE" = 1 ] && ENV_ARGS+=("VICTORY_LIVE=$LIVE_FILE")
 [ -n "$LOOP_LIMIT" ] && ENV_ARGS+=("VICTORY_SHADER_LOOP_LIMIT=$LOOP_LIMIT")
 [ -n "$SKIP" ] && ENV_ARGS+=("VICTORY_SKIP_PIPELINES=$SKIP")
 [ -n "$DUMP_TARGETS" ] && ENV_ARGS+=("VICTORY_DUMP_TARGETS=1" "VICTORY_DUMP_UNSAFE=1")
@@ -263,6 +275,7 @@ fi
 
 say "log:     $LOG"
 say "capture: $CAPTURE"
+[ "$LIVE" = 1 ] && say "live:      $(basename "$LIVE_FILE")"
 say "profile: $PROFILE  console: $CONSOLE  timing: $TIMING  presentmon: $PRESENTMON"
 say ""
 
@@ -298,7 +311,11 @@ fi
   # The build line: a lane checkout's commit, or, for a snapshot build, the commit, branch and profile from
   # snapshot.txt beside VICTORY_BIN (build-line.mjs says why).
   node "$TOOLS/build-line.mjs" "$VICTORY_DIR" "${VICTORY_BIN:-}" "$PROFILE" "$CONSOLE"
-  for E in "${ENV_ARGS[@]}"; do harness_env_line "$E"; done
+  # VICTORY_LIVE is named by the `harness env: live=` line below, as a file name only.
+  for E in "${ENV_ARGS[@]}"; do
+    case "$E" in VICTORY_LIVE=*) continue ;; esac
+    harness_env_line "$E"
+  done
   [ -n "${VICTORY_BIN:-}" ] && harness_env_line "VICTORY_BIN=$VICTORY_BIN"
   # A warm-up's bar feed writes its own errors to a file beside its log, never to null (a feed that died silently
   # left the bar stale on the 09:19 warm-up).
@@ -318,6 +335,7 @@ fi
   # Each helper's exit is recorded in the log; a failure is a line to read, not a silence to blame on the game.
   node "$TOOLS/disk-usage.mjs" --config "$SAVE_CONFIG" "game=$(dirname "$GAME_EXE")" 2>&1
   echo "harness: disk-usage exit=$?"
+  [ "$LIVE" = 1 ] && echo "harness env: live=$(basename "$LIVE_FILE")"
   [ -n "$ROUTE" ] && echo "harness env: route=$ROUTE"
   [ -n "$SETTLED_SECONDS" ] && echo "harness env: settled-seconds=$SETTLED_SECONDS"
   [ -n "$SETTLED_TIMEOUT" ] && echo "harness env: settled-timeout=$SETTLED_TIMEOUT"

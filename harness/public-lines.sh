@@ -64,7 +64,7 @@ public_line() {
     case "$line" in
       ''|\
       'harness: '*|'heartbeat: '*|'log: '*|'capture: '*|'profile: '*|'restore: '*|'saved: '*|\
-      'warm-up: '*|'warm-up mode: '*|'victory exit='*|'gpu-trace: '*|'renderdoc: '*|\
+      'warm-up: '*|'warm-up mode: '*|'live: '*|'victory exit='*|'gpu-trace: '*|'renderdoc: '*|\
       'pipeline library: '*|'refused: '*|'warning: '*|'unknown argument: '*|'--'*|'no '*|\
       'contact sheets: '*|'save-as failed'*|'usage: '*|\
       '# Run summary'*|'Range: '*|'Ending: '*|'Screen record: '*|'FPS: '*|'PresentMon: '*|\
